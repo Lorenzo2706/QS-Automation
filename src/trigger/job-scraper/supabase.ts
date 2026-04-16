@@ -29,6 +29,7 @@ export interface SearchConfig {
   keywords: string;
   job_types: string[];
   geo_id: string;
+  split_country: string | null;
   date_posted: string | null;
   sort_by: string;
   active: boolean;

@@ -56,9 +56,10 @@ export const scrapeJobsTask = schedules.task({
       return { jobsScraped: 0, jobsTriggered: 0 };
     }
 
-    const startUrls = configs.map((c) => ({ url: buildLinkedInUrl(c) }));
-    console.log(`Starting Apify run with ${startUrls.length} search URL(s):`);
-    startUrls.forEach((u) => console.log(" →", u.url));
+    const splitCountry = configs[0].split_country;
+    const urls = configs.map((c) => buildLinkedInUrl(c));
+    console.log(`Starting Apify run with ${urls.length} search URL(s):`);
+    urls.forEach((u) => console.log(" →", u));
 
     // 2. Start the Apify actor run
     const startResponse = await fetch(
@@ -69,7 +70,13 @@ export const scrapeJobsTask = schedules.task({
           "Content-Type": "application/json",
           Authorization: `Bearer ${apifyToken}`,
         },
-        body: JSON.stringify({ startUrls, maxResults: 100 }),
+        body: JSON.stringify({
+            count: 100,
+            scrapeCompany: true,
+            splitByLocation: false,
+            splitCountry,
+            urls,
+          }),
       }
     );
 

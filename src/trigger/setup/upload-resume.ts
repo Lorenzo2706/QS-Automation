@@ -3,8 +3,8 @@ import { readFileSync } from "fs";
 import { basename, resolve } from "path";
 import { createClient } from "@supabase/supabase-js";
 
-// pdf-parse uses CommonJS exports; esModuleInterop handles the default import
-import pdfParse from "pdf-parse";
+// pdf2json is a pure Node.js PDF parser — no web workers, no bundling issues
+import PDFParser from "pdf2json";
 
 /**
  * One-time setup task: parses a PDF resume and stores the text in Supabase.
@@ -58,8 +58,16 @@ export const uploadResumeTask = task({
       throw new Error(`Could not read file: ${absolutePath}. Check the path and try again.`);
     }
 
-    const pdfData = await pdfParse(buffer);
-    const parsedText = pdfData.text?.trim();
+    const parsedText = await new Promise<string>((resolve, reject) => {
+      const parser = new PDFParser(null, 1);
+      parser.on("pdfParser_dataError", (err: { parserError: Error }) =>
+        reject(new Error(String(err.parserError)))
+      );
+      parser.on("pdfParser_dataReady", () => {
+        resolve((parser as any).getRawTextContent()?.trim() ?? "");
+      });
+      parser.parseBuffer(buffer);
+    });
 
     if (!parsedText) {
       throw new Error("PDF parsing produced empty text — check the file is a valid text-based PDF");
