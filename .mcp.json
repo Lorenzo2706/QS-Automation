@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "type": "http",
+      "url": "https://mcp.supabase.com/mcp?project_ref=ezjffsxkisyecggeurzj"
+    },
+    "trigger": {
+      "command": "npx",
+      "args": ["trigger.dev@4.4.0", "mcp"]
+    }
+  }
+}
