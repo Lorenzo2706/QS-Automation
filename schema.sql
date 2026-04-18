@@ -16,25 +16,32 @@ CREATE TABLE IF NOT EXISTS users (
 -- Resumes
 CREATE TABLE IF NOT EXISTS resumes (
   resume_id   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID        NOT NULL REFERENCES users(user_id),
+  user_id     UUID        NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
   filename    TEXT,
   parsed_text TEXT        NOT NULL,
   is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Search configs (drives the Apify scraper)
+-- Search configs (drives the Apify scraper, one or more per user)
 -- geo_id 102890719 = Netherlands
 CREATE TABLE IF NOT EXISTS search_configs (
-  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  name        TEXT,
-  keywords    TEXT        NOT NULL,
-  job_types   TEXT[]      NOT NULL DEFAULT '{}',
-  geo_id      TEXT        NOT NULL,
-  date_posted TEXT,
-  sort_by     TEXT        NOT NULL DEFAULT 'DD',
-  active      BOOLEAN     NOT NULL DEFAULT TRUE
+  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID        NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  name          TEXT,
+  keywords      TEXT        NOT NULL,
+  job_types     TEXT[]      NOT NULL DEFAULT '{}',
+  geo_id        TEXT        NOT NULL,
+  date_posted   TEXT,
+  sort_by       TEXT        NOT NULL DEFAULT 'DD',
+  split_country TEXT,
+  linkedin_url  TEXT        NOT NULL,
+  active        BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS search_configs_user_active_idx
+  ON search_configs (user_id, active);
 
 -- Raw jobs (everything Apify returns, upserted by job_id)
 CREATE TABLE IF NOT EXISTS jobs_raw (
@@ -83,7 +90,7 @@ CREATE TABLE IF NOT EXISTS jobs_filtered (
 
 -- Job scores (user × job, with notification status)
 CREATE TABLE IF NOT EXISTS job_scores (
-  user_id          UUID    NOT NULL REFERENCES users(user_id),
+  user_id          UUID    NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
   resume_id        UUID    NOT NULL REFERENCES resumes(resume_id),
   job_id           TEXT    NOT NULL,
   relevance_score  INT     NOT NULL,
@@ -91,18 +98,3 @@ CREATE TABLE IF NOT EXISTS job_scores (
   notified         BOOLEAN NOT NULL DEFAULT FALSE,
   PRIMARY KEY (user_id, job_id)
 );
-
--- ============================================================
--- Seed: one search config for NL freelance/contract roles
--- Adjust keywords, job_types, and geo_id to match what you want
--- ============================================================
-INSERT INTO search_configs (name, keywords, job_types, geo_id, date_posted, sort_by)
-VALUES (
-  'NL Freelance/Contract',
-  'freelance OR contractor OR consultant',
-  ARRAY['CONTRACT', 'TEMPORARY'],
-  '102890719',
-  'past-month',
-  'DD'
-)
-ON CONFLICT DO NOTHING;

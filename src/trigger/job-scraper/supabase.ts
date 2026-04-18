@@ -25,6 +25,7 @@ export interface JobRow {
 
 export interface SearchConfig {
   id: string;
+  user_id: string;
   name: string | null;
   keywords: string;
   job_types: string[];
@@ -32,8 +33,13 @@ export interface SearchConfig {
   split_country: string | null;
   date_posted: string | null;
   sort_by: string;
+  linkedin_url: string;
   active: boolean;
 }
+
+export type NewSearchConfig = Omit<SearchConfig, "id" | "active"> & {
+  active?: boolean;
+};
 
 export interface UserRow {
   user_id: string;
@@ -71,14 +77,41 @@ function getClient(): SupabaseClient {
 
 // ─── Search configs ───────────────────────────────────────────────────────────
 
-export async function getActiveSearchConfigs(): Promise<SearchConfig[]> {
+export async function getActiveSearchConfigsForUser(
+  userId: string
+): Promise<SearchConfig[]> {
   const db = getClient();
   const { data, error } = await db
     .from("search_configs")
     .select("*")
+    .eq("user_id", userId)
     .eq("active", true);
-  if (error) throw new Error(`getActiveSearchConfigs: ${error.message}`);
+  if (error) throw new Error(`getActiveSearchConfigsForUser: ${error.message}`);
   return (data ?? []) as SearchConfig[];
+}
+
+export async function insertSearchConfig(
+  config: NewSearchConfig
+): Promise<SearchConfig> {
+  const db = getClient();
+  const { data, error } = await db
+    .from("search_configs")
+    .insert({
+      user_id: config.user_id,
+      name: config.name,
+      keywords: config.keywords,
+      job_types: config.job_types,
+      geo_id: config.geo_id,
+      date_posted: config.date_posted,
+      sort_by: config.sort_by,
+      split_country: config.split_country,
+      linkedin_url: config.linkedin_url,
+      active: config.active ?? true,
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(`insertSearchConfig: ${error.message}`);
+  return data as SearchConfig;
 }
 
 // ─── Raw jobs ─────────────────────────────────────────────────────────────────
