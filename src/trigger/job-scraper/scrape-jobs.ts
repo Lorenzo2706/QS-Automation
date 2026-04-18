@@ -19,7 +19,7 @@ export const scrapeJobsTask = schedules.task({
     // One Apify run per user, with that user's search URLs as input.
     // Idempotency keyed on timestamp so each scheduled run is distinct,
     // but duplicate fires within the same hour no-op.
-    const runStamp = payload.timestamp.toISOString().slice(0, 13); // YYYY-MM-DDTHH
+    const runStamp = new Date(payload.timestamp).toISOString().slice(0, 13); // YYYY-MM-DDTHH
     await scrapeUserJobsTask.batchTrigger(
       users.map((user) => ({
         payload: { userId: user.user_id },
