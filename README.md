@@ -1,6 +1,6 @@
 # QS Automation — Job Scraper
 
-Daily LinkedIn job scraper that filters for freelance/contract roles, scores them against each
+Daily LinkedIn job scraper that filters for freelance/temporary roles, scores them against each
 user's resume with Gemini, and sends high-match jobs to Telegram. Built on Trigger.dev v3.
 
 ## What it does (end-to-end)
@@ -8,14 +8,19 @@ user's resume with Gemini, and sends high-match jobs to Telegram. Built on Trigg
 1. At **09:00 Europe/Amsterdam**, `scrape-jobs` fires.
 2. It loads all active users from Supabase and fans out one `scrape-user-jobs` run per user.
 3. Each user run calls the **Apify** LinkedIn actor using that user's saved search URLs, waits for
-   it to finish (polling every 30s, up to 20 min), and upserts every result into `jobs_raw`.
-4. For each raw job, `filter-job` runs:
-   - If the job is already in `jobs_filtered` (some other user already confirmed it), it skips the
-     LLM and jumps to scoring.
-   - Otherwise it asks **Gemini** "is this temp/contract/freelance?". If yes → copy to
-     `jobs_filtered`. If no → drop.
-5. `classify-job` loads the user, their active resume, and the filtered job, then asks **Gemini**
-   to score the match 0–100. The score is written to `job_scores`.
+   it to finish (polling every 30s, up to 20 min), and bulk-inserts the results into `jobs_raw`
+   with `ON CONFLICT (job_id) DO NOTHING`. Truly-new rows are written with
+   `needs_evaluation = true`; rows that already exist are left untouched.
+4. For each scraped job, `filter-job` runs:
+   - If `needs_evaluation` is `true`, it asks **Gemini** to classify the posting as
+     `freelance` / `temporary` / `permanent` (exactly one true). Freelance and Temporary are
+     copied to `jobs_filtered` with `job_type` set to the Gemini category; Permanent is dropped.
+     Either way, `needs_evaluation` flips to `false` so the same job is never classified twice.
+   - If `needs_evaluation` is already `false`, it trusts the prior decision — no Gemini call.
+     If the job is in `jobs_filtered`, it proceeds to scoring for this user; otherwise it skips.
+5. `classify-job` short-circuits when `(user_id, job_id)` is already in `job_scores`. Otherwise
+   it loads the user, their active resume, and the filtered job, then asks **Gemini** to score
+   the match 0–100. The score is written to `job_scores`.
 6. If `score >= user.notification_threshold`, `notify-job` sends a formatted Telegram message and
    marks the score as notified.
 
@@ -28,14 +33,15 @@ user's resume with Gemini, and sends high-match jobs to Telegram. Built on Trigg
 scrape-jobs              ── fans out per active user
       │
       ▼
-scrape-user-jobs         ── Apify LinkedIn actor, upserts into jobs_raw
-      │
+scrape-user-jobs         ── Apify LinkedIn actor; insert-ignore-duplicates into jobs_raw
+      │                     (new rows get needs_evaluation = true)
       ▼ (one per job)
-filter-job               ── Gemini: is this freelance/contract?
-      │                     cached via jobs_filtered so we only ask once per job
+filter-job               ── if needs_evaluation: Gemini classifies freelance/temporary/permanent,
+      │                     writes jobs_filtered.job_type, then flips the flag to false.
+      │                     If flag is already false, skip Gemini and use the prior decision.
       ▼
-classify-job             ── Gemini: score this job against user's resume → job_scores
-      │
+classify-job             ── if (user, job) already in job_scores: skip.
+      │                     Else Gemini scores this job against the user's resume → job_scores.
       ▼ (only if score ≥ user threshold)
 notify-job               ── Telegram message to user.telegram_chat_id
 ```
@@ -46,11 +52,11 @@ notify-job               ── Telegram message to user.telegram_chat_id
 src/trigger/
 ├── job-scraper/                 ← the runtime pipeline
 │   ├── scrape-jobs.ts           scheduled task (09:00 AMS); fans out per user
-│   ├── scrape-user-jobs.ts      one Apify run per user; upserts jobs_raw
-│   ├── filter-job.ts            Gemini temp/freelance check; writes jobs_filtered
-│   ├── classify-job.ts          Gemini resume-vs-job score; writes job_scores
+│   ├── scrape-user-jobs.ts      one Apify run per user; bulk insertNewRawJobs into jobs_raw
+│   ├── filter-job.ts            flag-driven; Gemini 3-way classify; writes jobs_filtered
+│   ├── classify-job.ts          Gemini resume-vs-job score; writes job_scores (skips if scored)
 │   ├── notify-job.ts            Telegram sender; marks score.notified
-│   ├── gemini.ts                filterJob + scoreJob prompts (gemini-2.0-flash)
+│   ├── gemini.ts                filterJob (3-way) + scoreJob prompts (gemini-2.5-flash-lite)
 │   ├── supabase.ts              all DB reads/writes; typed row shapes
 │   └── url-builder.ts           builds LinkedIn search URL from a SearchConfig
 └── setup/                       ← one-time, manually triggered from dashboard
@@ -66,9 +72,9 @@ src/trigger/
 | `users` | One row per user. `active`, `notification_threshold`, `telegram_chat_id`. |
 | `resumes` | Parsed resume text per user. Only the row with `is_active = true` is used. |
 | `search_configs` | User's LinkedIn searches. `active = true` feeds the scraper. |
-| `jobs_raw` | Everything Apify returned, keyed by LinkedIn `job_id`. |
-| `jobs_filtered` | Subset of `jobs_raw` that Gemini confirmed as temp/freelance. Acts as the dedup cache so we don't re-ask Gemini for the same job. |
-| `job_scores` | Per (user, job) relevance score + reason. `notified` flips to true after Telegram. |
+| `jobs_raw` | Everything Apify returned, keyed by LinkedIn `job_id`. `needs_evaluation = true` on freshly-inserted rows; `filter-job` flips it to `false` after classifying (pass or fail) so Gemini never sees the same job twice. |
+| `jobs_filtered` | Subset of `jobs_raw` that Gemini classified as freelance or temporary. `job_type` stores the Gemini category (`"freelance"` or `"temporary"`) — not Apify's raw value. |
+| `job_scores` | Per (user, job) relevance score + reason. PK `(user_id, job_id)` doubles as a "already scored" marker so `classify-job` short-circuits re-runs. `notified` flips to true after Telegram. |
 
 ## Setup — new user checklist
 
@@ -113,10 +119,17 @@ Test triggers (via the Trigger.dev MCP):
 
 - **Per-user fan-out, not per-config.** One Apify run per user, with all their URLs as input.
   `splitCountry` is taken from the user's first config (it's actor-level, not per-URL).
-- **Two-stage Gemini.** `filter-job` is a yes/no "is this freelance?" so the expensive
-  resume-scoring call only runs on relevant jobs.
-- **`jobs_filtered` doubles as a cache.** If user A already caused a job to be filtered, user B
-  skips the LLM and goes straight to scoring for their own resume.
+- **Two-stage Gemini.** `filter-job` is a 3-way `freelance` / `temporary` / `permanent` classify
+  so the expensive resume-scoring call only runs on Freelance + Temporary jobs. Permanent is
+  dropped. The Dutch-specific rules live in `gemini.ts`: **explicit start/end dates or fixed
+  duration → Temporary**; Permanent is reserved for open-ended roles and "uitzicht op vast".
+- **`needs_evaluation` is the authoritative dedup flag.** Fresh rows get `true`; after filtering
+  (pass or fail) it flips to `false`. Re-scraping the same job the next day never re-hits Gemini,
+  and it works for rejected jobs too (the old `jobs_filtered`-as-cache approach only covered
+  passing jobs, so rejected ones were re-classified every day).
+- **`job_scores` PK is the classify-dedup key.** `classify-job` returns early when
+  `(user_id, job_id)` already has a score. To force a re-score (e.g. after a resume change),
+  delete the row.
 - **Per-user threshold.** `users.notification_threshold` is checked in `classify-job`; the score
   is always saved, but the Telegram send only happens if it clears the bar.
 - **Idempotency keys** on every fan-out call so re-running the cron doesn't duplicate work.
