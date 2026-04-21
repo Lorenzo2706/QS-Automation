@@ -4,6 +4,7 @@ import {
   getActiveResume,
   getFilteredJob,
   upsertJobScore,
+  jobScoreExists,
 } from "./supabase.js";
 import { scoreJob } from "./gemini.js";
 import { notifyJobTask } from "./notify-job.js";
@@ -23,6 +24,14 @@ export const classifyJobTask = task({
     // 1. Load user (needed for per-user notification threshold)
     const user = await getUser(userId);
     if (!user) throw new Error(`User not found: ${userId}`);
+
+    // Short-circuit: job_scores PK (user_id, job_id) is the authoritative
+    // "already scored" marker. Skip the Gemini scoring call when it exists.
+    // Clear the row in Supabase to force a re-score (e.g. after a resume update).
+    if (await jobScoreExists(userId, jobId)) {
+      console.log(`Job ${jobId} already scored for user ${userId} — skipping re-score`);
+      return { skipped: true, reason: "already_scored" };
+    }
 
     // 2. Load user's active resume
     const resume = await getActiveResume(userId);

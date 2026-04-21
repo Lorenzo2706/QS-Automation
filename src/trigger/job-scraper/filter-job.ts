@@ -3,6 +3,7 @@ import {
   jobFilteredExists,
   insertFilteredJob,
   getRawJob,
+  markJobEvaluated,
 } from "./supabase.js";
 import { filterJob as geminiFilterJob } from "./gemini.js";
 import { classifyJobTask } from "./classify-job.js";
@@ -19,42 +20,47 @@ export const filterJobTask = task({
   run: async (payload: { jobId: string; userId: string }) => {
     const { jobId, userId } = payload;
 
-    // Fast path: if this job already passed the Gemini filter in a prior run
-    // (possibly for a different user), skip the LLM call and go straight
-    // to scoring for this user.
-    if (await jobFilteredExists(jobId)) {
-      console.log(`Job ${jobId} already in jobs_filtered — scoring for user ${userId}`);
-      await classifyJobTask.trigger(
-        { jobId, userId },
-        { idempotencyKey: `classify-job-${jobId}-${userId}` }
-      );
-      return { filtered: true, cached: true };
-    }
-
     const rawJob = await getRawJob(jobId);
     if (!rawJob) {
       throw new Error(`Raw job not found in jobs_raw: ${jobId}`);
     }
 
-    const isFreelance = await geminiFilterJob(
+    // Already-classified path: needs_evaluation is the authoritative flag.
+    // If false, trust the prior decision and avoid re-calling Gemini.
+    if (!rawJob.needs_evaluation) {
+      if (await jobFilteredExists(jobId)) {
+        console.log(`Job ${jobId} already filtered — scoring for user ${userId}`);
+        await classifyJobTask.trigger(
+          { jobId, userId },
+          { idempotencyKey: `classify-job-${jobId}-${userId}` }
+        );
+        return { filtered: true, cached: true };
+      }
+      console.log(`Job ${jobId} previously rejected as permanent — skipping`);
+      return { skipped: true, reason: "previously_rejected" };
+    }
+
+    // Needs evaluation: run Gemini once and record the outcome.
+    const category = await geminiFilterJob(
       rawJob.title ?? "",
       rawJob.description_text ?? ""
     );
 
-    if (!isFreelance) {
-      console.log(`Job ${jobId} ("${rawJob.title}") not temp/freelance — skipping`);
-      return { skipped: true, reason: "not_freelance" };
+    if (category === "permanent") {
+      await markJobEvaluated(jobId);
+      console.log(`Job ${jobId} ("${rawJob.title}") classified permanent — skipping`);
+      return { skipped: true, reason: "permanent" };
     }
 
-    await insertFilteredJob(jobId);
-    console.log(`Job ${jobId} confirmed temp/freelance — copied to jobs_filtered`);
+    await insertFilteredJob(jobId, category);
+    await markJobEvaluated(jobId);
+    console.log(`Job ${jobId} classified ${category} — inserted into jobs_filtered`);
 
     await classifyJobTask.trigger(
       { jobId, userId },
       { idempotencyKey: `classify-job-${jobId}-${userId}` }
     );
 
-    console.log(`Classification triggered for user ${userId}`);
-    return { filtered: true, cached: false };
+    return { filtered: true, category, cached: false };
   },
 });

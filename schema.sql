@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS search_configs (
 CREATE INDEX IF NOT EXISTS search_configs_user_active_idx
   ON search_configs (user_id, active);
 
--- Raw jobs (everything Apify returns, upserted by job_id)
+-- Raw jobs (everything Apify returns; insert-only with ON CONFLICT DO NOTHING)
 CREATE TABLE IF NOT EXISTS jobs_raw (
   job_id             TEXT        PRIMARY KEY,
   title              TEXT,
@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS jobs_raw (
   job_poster_title   TEXT,
   apply_url          TEXT,
   language           TEXT,
-  scraped_at         TIMESTAMPTZ NOT NULL
+  scraped_at         TIMESTAMPTZ NOT NULL,
+  needs_evaluation   BOOLEAN     NOT NULL DEFAULT FALSE
 );
 
 -- Filtered jobs (passed Gemini temp/freelance check)
@@ -98,3 +99,16 @@ CREATE TABLE IF NOT EXISTS job_scores (
   notified         BOOLEAN NOT NULL DEFAULT FALSE,
   PRIMARY KEY (user_id, job_id)
 );
+
+-- ============================================================
+-- Migrations (safe to re-run; apply after the CREATE TABLE block above)
+-- ============================================================
+
+-- Adds the per-row "not yet filtered by Gemini" flag. New rows from
+-- insertNewRawJobs are written with TRUE; filter-job flips it to FALSE after
+-- classification (pass or fail) so we never Gemini the same job twice.
+ALTER TABLE jobs_raw
+  ADD COLUMN IF NOT EXISTS needs_evaluation BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS jobs_raw_needs_eval_idx
+  ON jobs_raw (needs_evaluation) WHERE needs_evaluation = TRUE;

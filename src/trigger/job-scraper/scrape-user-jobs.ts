@@ -1,5 +1,9 @@
 import { task, wait } from "@trigger.dev/sdk/v3";
-import { getActiveSearchConfigsForUser, upsertRawJob } from "./supabase.js";
+import {
+  getActiveSearchConfigsForUser,
+  insertNewRawJobs,
+  JobRow,
+} from "./supabase.js";
 import { filterJobTask } from "./filter-job.js";
 
 interface ApifyJob {
@@ -124,7 +128,8 @@ export const scrapeUserJobsTask = task({
     console.log(`User ${userId}: fetched ${jobs.length} jobs from Apify`);
 
     const now = new Date().toISOString();
-    const validJobIds: string[] = [];
+    const rows: JobRow[] = [];
+    const allJobIds: string[] = [];
 
     for (const job of jobs) {
       const jobId = job.id ?? job.jobId;
@@ -133,7 +138,7 @@ export const scrapeUserJobsTask = task({
         continue;
       }
 
-      await upsertRawJob({
+      rows.push({
         job_id: jobId,
         title: job.title ?? null,
         standardized_title: job.normalizedTitle ?? job.standardizedTitle ?? null,
@@ -152,16 +157,23 @@ export const scrapeUserJobsTask = task({
         apply_url: job.applyUrl ?? null,
         language: job.language ?? null,
         scraped_at: now,
+        needs_evaluation: true,
       });
 
-      validJobIds.push(jobId);
+      allJobIds.push(jobId);
     }
 
-    console.log(`User ${userId}: stored ${validJobIds.length} jobs in jobs_raw`);
+    const newJobIds = await insertNewRawJobs(rows);
+    console.log(
+      `User ${userId}: scraped ${jobs.length}, new ${newJobIds.length}, triggering filter for ${allJobIds.length}`
+    );
 
-    if (validJobIds.length > 0) {
+    // Trigger filter for every scraped job (new and already-seen). The filter
+    // task short-circuits on needs_evaluation=false, so re-scraped jobs don't
+    // re-hit Gemini but still reach classify-job for this user.
+    if (allJobIds.length > 0) {
       await filterJobTask.batchTrigger(
-        validJobIds.map((jobId) => ({
+        allJobIds.map((jobId) => ({
           payload: { jobId, userId },
           options: { idempotencyKey: `filter-job-${jobId}-${userId}` },
         }))
@@ -172,7 +184,8 @@ export const scrapeUserJobsTask = task({
       userId,
       runId,
       jobsScraped: jobs.length,
-      jobsTriggered: validJobIds.length,
+      jobsNew: newJobIds.length,
+      jobsTriggered: allJobIds.length,
     };
   },
 });

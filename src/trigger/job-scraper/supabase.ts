@@ -21,6 +21,7 @@ export interface JobRow {
   apply_url: string | null;
   language: string | null;
   scraped_at: string;
+  needs_evaluation: boolean;
 }
 
 export interface SearchConfig {
@@ -116,12 +117,20 @@ export async function insertSearchConfig(
 
 // ─── Raw jobs ─────────────────────────────────────────────────────────────────
 
-export async function upsertRawJob(job: JobRow): Promise<void> {
+// Inserts a batch of scraped jobs, ignoring any whose job_id already exists
+// in jobs_raw. Returns the job_ids that were actually inserted — those are
+// the rows carrying needs_evaluation=true and eligible for a Gemini filter
+// call. Existing rows are left untouched (their needs_evaluation flag keeps
+// whatever value it had from the prior run).
+export async function insertNewRawJobs(jobs: JobRow[]): Promise<string[]> {
+  if (jobs.length === 0) return [];
   const db = getClient();
-  const { error } = await db
+  const { data, error } = await db
     .from("jobs_raw")
-    .upsert(job, { onConflict: "job_id" });
-  if (error) throw new Error(`upsertRawJob ${job.job_id}: ${error.message}`);
+    .upsert(jobs, { onConflict: "job_id", ignoreDuplicates: true })
+    .select("job_id");
+  if (error) throw new Error(`insertNewRawJobs: ${error.message}`);
+  return (data ?? []).map((row: { job_id: string }) => row.job_id);
 }
 
 export async function getRawJob(jobId: string): Promise<JobRow | null> {
@@ -133,6 +142,15 @@ export async function getRawJob(jobId: string): Promise<JobRow | null> {
     .single();
   if (error && error.code !== "PGRST116") throw new Error(`getRawJob: ${error.message}`);
   return (data ?? null) as JobRow | null;
+}
+
+export async function markJobEvaluated(jobId: string): Promise<void> {
+  const db = getClient();
+  const { error } = await db
+    .from("jobs_raw")
+    .update({ needs_evaluation: false })
+    .eq("job_id", jobId);
+  if (error) throw new Error(`markJobEvaluated ${jobId}: ${error.message}`);
 }
 
 // ─── Filtered jobs ────────────────────────────────────────────────────────────
@@ -147,15 +165,20 @@ export async function jobFilteredExists(jobId: string): Promise<boolean> {
   return (count ?? 0) > 0;
 }
 
-export async function insertFilteredJob(jobId: string): Promise<void> {
+export async function insertFilteredJob(
+  jobId: string,
+  jobType: "freelance" | "temporary"
+): Promise<void> {
   const db = getClient();
   const raw = await getRawJob(jobId);
   if (!raw) throw new Error(`insertFilteredJob: raw job not found: ${jobId}`);
-  // Copy row to jobs_filtered; DB sets filtered_at = NOW() via DEFAULT
-  const { scraped_at: _scraped, ...rest } = raw;
+  // Copy jobs_raw row into jobs_filtered, overwriting job_type with Gemini's
+  // classification and dropping the needs_evaluation flag (only belongs on raw).
+  const { scraped_at, needs_evaluation: _flag, ...rest } = raw;
+  const row = { ...rest, job_type: jobType, scraped_at };
   const { error } = await db
     .from("jobs_filtered")
-    .upsert({ ...rest, scraped_at: _scraped }, { onConflict: "job_id" });
+    .upsert(row, { onConflict: "job_id" });
   if (error) throw new Error(`insertFilteredJob: ${error.message}`);
 }
 
@@ -215,6 +238,17 @@ export async function upsertJobScore(score: JobScoreRow): Promise<void> {
     .from("job_scores")
     .upsert(score, { onConflict: "user_id,job_id" });
   if (error) throw new Error(`upsertJobScore: ${error.message}`);
+}
+
+export async function jobScoreExists(userId: string, jobId: string): Promise<boolean> {
+  const db = getClient();
+  const { count, error } = await db
+    .from("job_scores")
+    .select("job_id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("job_id", jobId);
+  if (error) throw new Error(`jobScoreExists: ${error.message}`);
+  return (count ?? 0) > 0;
 }
 
 export async function markScoreNotified(userId: string, jobId: string): Promise<void> {
