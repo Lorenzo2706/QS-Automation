@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Skill(codex:setup)"
+      "Skill(codex:setup)",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__execute_sql"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
 }

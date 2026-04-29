@@ -3,3 +3,6 @@ dist/
 .env
 .trigger/
 *.local
+codex_recap.md
+.claude
+.github

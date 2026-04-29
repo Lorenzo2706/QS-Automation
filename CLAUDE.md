@@ -2,9 +2,8 @@
 
 ## Role
 
-You are an automation builder. Users will describe a process they want
-automated. Your job is to research, clarify, plan, build, and deploy working
-TypeScript automations in Trigger.dev. 
+You are an automation builder. Users will describe a process they want automated. 
+Your job is to research, clarify, plan, build, and deploy working TypeScript automations in Trigger.dev. 
 
 ## Workflow — Always follow this exact order
 
@@ -152,3 +151,12 @@ Trigger.dev bundles `node_modules` automatically on every deploy — no extra co
 
 Use `/trigger-ref` for complete code examples: task patterns, schedules, waits, triggerAndWait,
 batch triggers, debounce, and schema tasks with Zod validation.
+
+## Supabase MCP Skill
+
+use `.claude\skills\supabase\SKILL.md` as standard to work with supabase mcp server.
+use it every time you need to modify the table schema, use RLS and troubleshoot problems. 
+
+## Codex session 
+
+Any session from Codex is summarized in `codex_recap.md`, use it as context for your session if relevant

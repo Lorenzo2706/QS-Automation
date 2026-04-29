@@ -69,24 +69,45 @@ src/trigger/
 
 | Table | Purpose |
 |---|---|
-| `users` | One row per user. `active`, `notification_threshold`, `telegram_chat_id`. |
+| `users` | One row per user, keyed by `auth.users.id` (1:1 link). `active`, `notification_threshold`, `telegram_chat_id`. Auto-created by an `on_auth_user_created` trigger on signup. |
 | `resumes` | Parsed resume text per user. Only the row with `is_active = true` is used. |
 | `search_configs` | User's LinkedIn searches. `active = true` feeds the scraper. |
 | `jobs_raw` | Everything Apify returned, keyed by LinkedIn `job_id`. `needs_evaluation = true` on freshly-inserted rows; `filter-job` flips it to `false` after classifying (pass or fail) so Gemini never sees the same job twice. |
 | `jobs_filtered` | Subset of `jobs_raw` that Gemini classified as freelance or temporary. `job_type` stores the Gemini category (`"freelance"` or `"temporary"`) — not Apify's raw value. |
 | `job_scores` | Per (user, job) relevance score + reason. PK `(user_id, job_id)` doubles as a "already scored" marker so `classify-job` short-circuits re-runs. `notified` flips to true after Telegram. |
 
+### Auth & RLS
+
+- **`public.users.user_id` is a foreign key to `auth.users.id`** with `ON DELETE CASCADE`.
+  When someone signs up through Supabase Auth, a trigger (`private.handle_new_auth_user`) inserts
+  the matching `public.users` row with `user_id = auth.uid()` and name/email pulled from the auth
+  record.
+- **RLS is on every table.** Authenticated users only see and manage their own rows in `users`,
+  `resumes`, `search_configs`, and their own entries in `job_scores` (read-only — writes come from
+  the backend).
+- **`jobs_raw` and `jobs_filtered` have no client-facing policies.** Only the `service_role` key
+  (used by the Trigger.dev tasks) can read or write them; anonymous and authenticated clients see
+  nothing.
+- **The Trigger.dev backend uses `SUPABASE_SERVICE_ROLE_KEY`** (which bypasses RLS) because the
+  pipeline writes across all users and needs to touch tables that have no client policies. This
+  key must never be sent to a browser.
+
 ## Setup — new user checklist
 
 Each of these is triggered manually from the Trigger.dev dashboard.
 
-1. `register-user` → get back a `user_id`.
+1. `register-user` with `{ email, password, name, telegramChatId?, notificationThreshold? }` →
+   calls `supabase.auth.admin.createUser()`; the signup trigger creates the `public.users` row,
+   and the task then updates it with `telegram_chat_id` and `notification_threshold`. Returns
+   the new `user_id`.
 2. `upload-resume` with `{ userId, pdfPath }` → parses a local PDF, stores text. Must run from
    the dev server (the file path is local).
 3. `create-search-config` with `{ userId, keywords, geoId, ... }` → persists a LinkedIn URL.
    Repeat for each saved search.
 
-After that the 09:00 cron picks them up automatically.
+After that the 09:00 cron picks them up automatically. Once the frontend signup flow is built,
+step 1 gets replaced by a normal Supabase Auth signup (the trigger handles the rest); users
+update their own `telegram_chat_id` and `notification_threshold` via the app, governed by RLS.
 
 ## Environment variables
 
@@ -95,7 +116,8 @@ All required in both `.env` (local) **and** the Trigger.dev dashboard (staging +
 | Key | Used by |
 |---|---|
 | `SUPABASE_URL` | all DB calls |
-| `SUPABASE_ANON_KEY` | all DB calls |
+| `SUPABASE_SERVICE_ROLE_KEY` | all backend DB calls — **bypasses RLS, never expose to a browser** (Settings → API → service_role secret) |
+| `SUPABASE_ANON_KEY` | future frontend clients (subject to RLS); not used by Trigger.dev tasks |
 | `APIFY_API_TOKEN` | `scrape-user-jobs` |
 | `GEMINI_API_KEY` | `filter-job`, `classify-job` |
 | `TELEGRAM_BOT_TOKEN` | `notify-job` |
