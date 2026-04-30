@@ -1,7 +1,8 @@
 # QS Automation — Job Scraper
 
 Daily LinkedIn job scraper that filters for freelance/temporary roles, scores them against each
-user's resume with Gemini, and sends high-match jobs to Telegram. Built on Trigger.dev v3.
+user's resume with Gemini, and emails each user a daily recap of their high-match jobs. Built on
+Trigger.dev v3.
 
 ## What it does (end-to-end)
 
@@ -21,8 +22,10 @@ user's resume with Gemini, and sends high-match jobs to Telegram. Built on Trigg
 5. `classify-job` short-circuits when `(user_id, job_id)` is already in `job_scores`. Otherwise
    it loads the user, their active resume, and the filtered job, then asks **Gemini** to score
    the match 0–100. The score is written to `job_scores`.
-6. If `score >= user.notification_threshold`, `notify-job` sends a formatted Telegram message and
-   marks the score as notified.
+6. At **09:30 Europe/Amsterdam**, `send-recap` fires. For each active user it queries
+   `job_scores` for unnotified rows where `relevance_score >= user.notification_threshold`,
+   builds an HTML recap email with all matching jobs (sorted by score), sends it via **Resend**,
+   and flips `notified = true` on the included rows.
 
 ## Pipeline
 
@@ -42,8 +45,12 @@ filter-job               ── if needs_evaluation: Gemini classifies freelance
       ▼
 classify-job             ── if (user, job) already in job_scores: skip.
       │                     Else Gemini scores this job against the user's resume → job_scores.
-      ▼ (only if score ≥ user threshold)
-notify-job               ── Telegram message to user.telegram_chat_id
+
+[cron 09:30 AMS]
+      │
+      ▼
+send-recap               ── one email per active user via Resend, listing all unnotified
+                            matches above their threshold; flips job_scores.notified = true
 ```
 
 ## Code layout
@@ -55,7 +62,8 @@ src/trigger/
 │   ├── scrape-user-jobs.ts      one Apify run per user; bulk insertNewRawJobs into jobs_raw
 │   ├── filter-job.ts            flag-driven; Gemini 3-way classify; writes jobs_filtered
 │   ├── classify-job.ts          Gemini resume-vs-job score; writes job_scores (skips if scored)
-│   ├── notify-job.ts            Telegram sender; marks score.notified
+│   ├── send-recap.ts            scheduled task (09:30 AMS); sends one Resend email per user
+│   │                            with all unnotified matches above threshold
 │   ├── gemini.ts                filterJob (3-way) + scoreJob prompts (gemini-2.5-flash-lite)
 │   ├── supabase.ts              all DB reads/writes; typed row shapes
 │   └── url-builder.ts           builds LinkedIn search URL from a SearchConfig
@@ -69,12 +77,12 @@ src/trigger/
 
 | Table | Purpose |
 |---|---|
-| `users` | One row per user, keyed by `auth.users.id` (1:1 link). `active`, `notification_threshold`, `telegram_chat_id`. Auto-created by an `on_auth_user_created` trigger on signup. |
+| `users` | One row per user, keyed by `auth.users.id` (1:1 link). `email` (NOT NULL), `active`, `notification_threshold`. Auto-created by an `on_auth_user_created` trigger on signup; email is copied from `auth.users.email`. |
 | `resumes` | Parsed resume text per user. Only the row with `is_active = true` is used. |
 | `search_configs` | User's LinkedIn searches. `active = true` feeds the scraper. |
 | `jobs_raw` | Everything Apify returned, keyed by LinkedIn `job_id`. `needs_evaluation = true` on freshly-inserted rows; `filter-job` flips it to `false` after classifying (pass or fail) so Gemini never sees the same job twice. |
 | `jobs_filtered` | Subset of `jobs_raw` that Gemini classified as freelance or temporary. `job_type` stores the Gemini category (`"freelance"` or `"temporary"`) — not Apify's raw value. |
-| `job_scores` | Per (user, job) relevance score + reason. PK `(user_id, job_id)` doubles as a "already scored" marker so `classify-job` short-circuits re-runs. `notified` flips to true after Telegram. |
+| `job_scores` | Per (user, job) relevance score + reason. PK `(user_id, job_id)` doubles as a "already scored" marker so `classify-job` short-circuits re-runs. `notified` flips to true after the daily recap email is sent. |
 
 ### Auth & RLS
 
@@ -96,10 +104,10 @@ src/trigger/
 
 Each of these is triggered manually from the Trigger.dev dashboard.
 
-1. `register-user` with `{ email, password, name, telegramChatId?, notificationThreshold? }` →
-   calls `supabase.auth.admin.createUser()`; the signup trigger creates the `public.users` row,
-   and the task then updates it with `telegram_chat_id` and `notification_threshold`. Returns
-   the new `user_id`.
+1. `register-user` with `{ email, password, name, notificationThreshold? }` →
+   calls `supabase.auth.admin.createUser()`; the signup trigger creates the `public.users` row
+   (with email copied from auth), and the task then updates it with `notification_threshold`.
+   Returns the new `user_id`.
 2. `upload-resume` with `{ userId, pdfPath }` → parses a local PDF, stores text. Must run from
    the dev server (the file path is local).
 3. `create-search-config` with `{ userId, keywords, geoId, ... }` → persists a LinkedIn URL.
@@ -107,7 +115,7 @@ Each of these is triggered manually from the Trigger.dev dashboard.
 
 After that the 09:00 cron picks them up automatically. Once the frontend signup flow is built,
 step 1 gets replaced by a normal Supabase Auth signup (the trigger handles the rest); users
-update their own `telegram_chat_id` and `notification_threshold` via the app, governed by RLS.
+update their own `notification_threshold` via the app, governed by RLS.
 
 ## Environment variables
 
@@ -120,7 +128,8 @@ All required in both `.env` (local) **and** the Trigger.dev dashboard (staging +
 | `SUPABASE_ANON_KEY` | future frontend clients (subject to RLS); not used by Trigger.dev tasks |
 | `APIFY_API_TOKEN` | `scrape-user-jobs` |
 | `GEMINI_API_KEY` | `filter-job`, `classify-job` |
-| `TELEGRAM_BOT_TOKEN` | `notify-job` |
+| `RESEND_API_KEY` | `send-recap` |
+| `RESEND_FROM_EMAIL` | `send-recap` (verified sender, e.g. `onboarding@resend.dev` or `jobs@yourdomain.com`) |
 
 ## Running it
 

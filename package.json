@@ -10,7 +10,8 @@
     "@google/generative-ai": "^0.21.0",
     "@supabase/supabase-js": "^2.45.0",
     "@trigger.dev/sdk": "4.4.4",
-    "pdf2json": "^4.0.3"
+    "pdf2json": "^4.0.3",
+    "resend": "^6.12.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -45,10 +45,20 @@ export type NewSearchConfig = Omit<SearchConfig, "id" | "active"> & {
 export interface UserRow {
   user_id: string;
   name: string;
-  email: string | null;
-  telegram_chat_id: string | null;
+  email: string;
   notification_threshold: number;
   active: boolean;
+}
+
+export interface RecapMatch {
+  job_id: string;
+  title: string | null;
+  company_name: string | null;
+  location: string | null;
+  url: string | null;
+  apply_url: string | null;
+  relevance_score: number;
+  relevance_reason: string | null;
 }
 
 export interface ResumeRow {
@@ -251,12 +261,69 @@ export async function jobScoreExists(userId: string, jobId: string): Promise<boo
   return (count ?? 0) > 0;
 }
 
-export async function markScoreNotified(userId: string, jobId: string): Promise<void> {
+// Returns matching jobs that haven't been emailed yet, sorted by score desc.
+// job_scores has no FK to jobs_filtered, so we fetch both and merge in code.
+export async function getUnnotifiedMatches(
+  userId: string,
+  threshold: number
+): Promise<RecapMatch[]> {
+  const db = getClient();
+  const { data: scores, error: scoresErr } = await db
+    .from("job_scores")
+    .select("job_id, relevance_score, relevance_reason")
+    .eq("user_id", userId)
+    .eq("notified", false)
+    .gte("relevance_score", threshold)
+    .order("relevance_score", { ascending: false });
+  if (scoresErr) throw new Error(`getUnnotifiedMatches scores: ${scoresErr.message}`);
+  const scoreRows = (scores ?? []) as Array<{
+    job_id: string;
+    relevance_score: number;
+    relevance_reason: string | null;
+  }>;
+  if (scoreRows.length === 0) return [];
+
+  const { data: jobs, error: jobsErr } = await db
+    .from("jobs_filtered")
+    .select("job_id, title, company_name, location, url, apply_url")
+    .in(
+      "job_id",
+      scoreRows.map((s) => s.job_id)
+    );
+  if (jobsErr) throw new Error(`getUnnotifiedMatches jobs: ${jobsErr.message}`);
+  const jobById = new Map(
+    ((jobs ?? []) as Array<{
+      job_id: string;
+      title: string | null;
+      company_name: string | null;
+      location: string | null;
+      url: string | null;
+      apply_url: string | null;
+    }>).map((j) => [j.job_id, j])
+  );
+
+  return scoreRows.map((s) => {
+    const job = jobById.get(s.job_id);
+    return {
+      job_id: s.job_id,
+      title: job?.title ?? null,
+      company_name: job?.company_name ?? null,
+      location: job?.location ?? null,
+      url: job?.url ?? null,
+      apply_url: job?.apply_url ?? null,
+      relevance_score: s.relevance_score,
+      relevance_reason: s.relevance_reason,
+    };
+  });
+}
+
+export async function markScoresNotified(userId: string, jobIds: string[]): Promise<void> {
+  if (jobIds.length === 0) return;
   const db = getClient();
   const { error } = await db
     .from("job_scores")
     .update({ notified: true })
     .eq("user_id", userId)
-    .eq("job_id", jobId);
-  if (error) throw new Error(`markScoreNotified: ${error.message}`);
+    .in("job_id", jobIds);
+  if (error) throw new Error(`markScoresNotified: ${error.message}`);
 }

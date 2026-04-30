@@ -12,10 +12,11 @@ export const filterJobTask = task({
   id: "filter-job",
   maxDuration: 120,
   retry: {
-    maxAttempts: 3,
-    minTimeoutInMs: 2000,
-    maxTimeoutInMs: 30_000,
+    maxAttempts: 5,
+    minTimeoutInMs: 2_000,
+    maxTimeoutInMs: 60_000,
     factor: 2,
+    randomize: true,
   },
   run: async (payload: { jobId: string; userId: string }) => {
     const { jobId, userId } = payload;

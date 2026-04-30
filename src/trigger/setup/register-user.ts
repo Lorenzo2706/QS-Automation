@@ -10,22 +10,16 @@ import { createClient } from "@supabase/supabase-js";
  *   - The on_auth_user_created trigger (see schema.sql) inserts the matching
  *     public.users row with user_id = auth user's id, name (from
  *     user_metadata.name, falls back to email) and email.
- *   - This task then UPDATEs that row with telegram_chat_id and
- *     notification_threshold, since those aren't carried by the auth flow.
+ *   - This task then UPDATEs that row with notification_threshold, since it's
+ *     not carried by the auth flow.
  *
  * Trigger from the Trigger.dev dashboard with a payload like:
  * {
  *   "email": "lorenzo@example.com",
  *   "password": "a-secure-password",
  *   "name": "Lorenzo",
- *   "telegramChatId": "123456789",
  *   "notificationThreshold": 85
  * }
- *
- * To find your Telegram chat ID:
- *   1. Send any message to your bot
- *   2. Open https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
- *   3. Look for "chat": {"id": <number>} — that number is your chat ID
  */
 export const registerUserTask = task({
   id: "register-user",
@@ -33,11 +27,10 @@ export const registerUserTask = task({
     email: string;
     password: string;
     name: string;
-    telegramChatId?: string;
     /** Minimum relevance score (0–100) to trigger a notification. Default: 85 */
     notificationThreshold?: number;
   }) => {
-    const { email, password, name, telegramChatId, notificationThreshold = 85 } = payload;
+    const { email, password, name, notificationThreshold = 85 } = payload;
 
     if (!email?.trim()) throw new Error("email is required");
     if (!password?.trim()) throw new Error("password is required");
@@ -67,23 +60,24 @@ export const registerUserTask = task({
     const { data: updated, error: updateErr } = await db
       .from("users")
       .update({
-        telegram_chat_id: telegramChatId?.trim() ?? null,
         notification_threshold: notificationThreshold,
       })
       .eq("user_id", userId)
-      .select("user_id, name, notification_threshold")
+      .select("user_id, name, email, notification_threshold")
       .single();
     if (updateErr) throw new Error(`Failed to update users row: ${updateErr.message}`);
 
     console.log(`User registered successfully:`);
     console.log(`  user_id: ${updated.user_id}`);
     console.log(`  name: ${updated.name}`);
+    console.log(`  email: ${updated.email}`);
     console.log(`  notification_threshold: ${updated.notification_threshold}`);
     console.log(`Save the user_id — you will need it for the upload-resume task.`);
 
     return {
       userId: updated.user_id as string,
       name: updated.name as string,
+      email: updated.email as string,
       notificationThreshold: updated.notification_threshold as number,
     };
   },

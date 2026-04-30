@@ -16,8 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
   user_id                UUID        PRIMARY KEY
                                       REFERENCES auth.users(id) ON DELETE CASCADE,
   name                   TEXT        NOT NULL,
-  email                  TEXT,
-  telegram_chat_id       TEXT,
+  email                  TEXT        NOT NULL,
   notification_threshold INT         NOT NULL DEFAULT 85,
   active                 BOOLEAN     NOT NULL DEFAULT TRUE
 );

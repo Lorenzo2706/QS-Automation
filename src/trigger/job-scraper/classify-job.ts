@@ -7,16 +7,16 @@ import {
   jobScoreExists,
 } from "./supabase.js";
 import { scoreJob } from "./gemini.js";
-import { notifyJobTask } from "./notify-job.js";
 
 export const classifyJobTask = task({
   id: "classify-job",
   maxDuration: 120,
   retry: {
-    maxAttempts: 3,
-    minTimeoutInMs: 2000,
-    maxTimeoutInMs: 30_000,
+    maxAttempts: 5,
+    minTimeoutInMs: 2_000,
+    maxTimeoutInMs: 60_000,
     factor: 2,
+    randomize: true,
   },
   run: async (payload: { jobId: string; userId: string }) => {
     const { jobId, userId } = payload;
@@ -64,16 +64,9 @@ export const classifyJobTask = task({
       relevance_reason: reason,
     });
 
-    // 6. Notify if score meets user's personal threshold
-    const shouldNotify = score >= user.notification_threshold;
-    if (shouldNotify) {
-      const result = await notifyJobTask.triggerAndWait({ jobId, userId, score, reason });
-      if (!result.ok) {
-        // Non-fatal: score is already saved — log and continue
-        console.error(`notify-job failed for ${jobId}/${userId}: ${result.error}`);
-      }
-    }
-
-    return { score, reason, notified: shouldNotify };
+    // Notification is handled separately by the send-recap scheduled task,
+    // which drains job_scores rows where notified = false and emails one
+    // recap per user per day.
+    return { score, reason, meetsThreshold: score >= user.notification_threshold };
   },
 });

@@ -1,5 +1,17 @@
 # Claude Workflow Builder
 
+## Project at a glance
+
+This repo is **QS Automation** — a daily LinkedIn job-scraper pipeline on Trigger.dev v3.
+Pipeline: `scrape-jobs` (cron 09:00 AMS) → `scrape-user-jobs` (Apify) → `filter-job` (Gemini
+3-way classify) → `classify-job` (Gemini resume score) → `notify-job` (Telegram).
+Storage: Supabase (`users`, `resumes`, `search_configs`, `jobs_raw`, `jobs_filtered`,
+`job_scores`). See `README.md` for the full pipeline diagram, table purposes, and RLS model;
+see `schema.sql` + `migrations/` for the canonical schema.
+
+The "Role / Workflow" section below applies when the user asks for a **new** automation.
+For changes to the existing job-scraper pipeline, skip steps 1–4 and go straight to Build.
+
 ## Role
 
 You are an automation builder. Users will describe a process they want automated. 
@@ -61,6 +73,7 @@ src/trigger/{automation-name}/
 - **Verify `.gitignore` includes `.env`** before any commit. Never commit secrets.
 - **When adding a new env var**: add it to `.env` with a descriptive comment explaining where to
   get it, then remind the user to also add it to the Trigger.dev dashboard
+- `SUPABASE_SERVICE_ROLE_KEY` is what every Trigger.dev task uses (bypasses RLS by design — `jobs_raw` and `jobs_filtered` have no client policies). Never expose it to a browser/frontend client.
 
 ## Trigger.dev Critical Rules
 
@@ -102,7 +115,7 @@ You have live Trigger.dev MCP tools. Prefer them over running CLI commands in th
 
 ## Testing Locally
 
-1. Start the dev server: `npx trigger.dev@latest dev`
+1. Start the dev server: `npm run dev`
 2. Use `mcp__trigger__trigger_task` to fire a test run with a sample payload
 3. Watch logs in the terminal — errors appear here in real time
 4. Use `mcp__trigger__get_run_details` to inspect the full run trace if something fails
@@ -122,7 +135,7 @@ Wait for the user to say "push it", "deploy", "ship it", or similar before touch
 - [ ] **User has explicitly confirmed** the automation works and approved the deploy
 - [ ] `.env` is in `.gitignore`
 
-**Deploy**: push to `master` — GitHub Actions auto-deploys via `.github/workflows/deploy.yml`
+**Deploy**: `npm run deploy`, or push to `master` — GitHub Actions auto-deploys via `.github/workflows/deploy.yml`
 
 **After deploying:**
 - Use `mcp__trigger__list_runs` to confirm the first run succeeded
@@ -149,8 +162,13 @@ Trigger.dev bundles `node_modules` automatically on every deploy — no extra co
 
 ## Full Trigger.dev API Reference
 
-Use `/trigger-ref` for complete code examples: task patterns, schedules, waits, triggerAndWait,
-batch triggers, debounce, and schema tasks with Zod validation.
+Read `trigger-ref.md` (at repo root) for complete code examples: task patterns, schedules, waits,
+triggerAndWait, batch triggers, debounce, and schema tasks with Zod validation.
+
+## Database changes
+
+- Canonical schema lives in `schema.sql`; numbered files in `migrations/` are the applied diffs.
+- For any table/RLS change, follow `.claude/skills/supabase/SKILL.md` and add a new numbered migration — never edit `schema.sql` by hand without a matching migration.
 
 ## Supabase MCP Skill
 

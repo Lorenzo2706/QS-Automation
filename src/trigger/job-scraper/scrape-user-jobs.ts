@@ -75,7 +75,7 @@ export const scrapeUserJobsTask = task({
           count: 100,
           scrapeCompany: true,
           splitByLocation: false,
-          splitCountry,
+          ...(splitCountry ? { splitCountry } : {}),
           urls,
         }),
       }
