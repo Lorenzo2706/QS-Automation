@@ -3,7 +3,12 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { LoginSchema, SignupSchema } from "@/lib/validation";
+import {
+  ForgotPasswordSchema,
+  LoginSchema,
+  PasswordChangeSchema,
+  SignupSchema,
+} from "@/lib/validation";
 
 export type ActionResult = { error: string } | { success: true };
 
@@ -70,6 +75,51 @@ export async function signoutAction(): Promise<void> {
   const supabase = await createClient();
   await supabase.auth.signOut();
   redirect("/login");
+}
+
+export async function requestPasswordResetAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const parsed = ForgotPasswordSchema.safeParse({ email: formData.get("email") });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const supabase = await createClient();
+  const origin = getOrigin();
+  const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
+    redirectTo: `${origin}/auth/confirm?next=/reset-password`,
+  });
+  // Surface only hard errors (e.g. rate limiting). For unknown emails Supabase does not
+  // error — we still redirect to check-inbox so we never reveal whether an account exists.
+  if (error) return { error: error.message };
+
+  redirect("/forgot-password/check-inbox");
+}
+
+export async function resetPasswordAction(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const parsed = PasswordChangeSchema.safeParse({ password: formData.get("password") });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: "Reset link expired or invalid. Request a new one." };
+  }
+
+  const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
+  if (error) return { error: error.message };
+
+  await supabase.auth.signOut();
+  redirect("/login?reset=success");
 }
 
 export async function resendConfirmationAction(formData: FormData): Promise<ActionResult> {

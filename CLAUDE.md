@@ -4,16 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project at a glance
 
-This repo is **QS Automation** — a daily LinkedIn job-scraper pipeline on Trigger.dev v3, plus
-a Next.js frontend that lets invited users self-serve onboarding.
+This repo is **QS Automation** — a per-user LinkedIn job-scraper pipeline on Trigger.dev v3, plus
+a Next.js frontend that lets invited users self-serve onboarding and run the pipeline.
 
-Pipeline (in `src/trigger/`): `scrape-jobs` (cron 09:00 AMS) → `scrape-user-jobs` (Apify) →
-`filter-job` (Gemini 3-way classify) → `classify-job` (Gemini resume score) → `send-recap`
-(cron 09:30 AMS, daily Resend email per user).
+Pipeline (in `src/trigger/`): `run-user-pipeline` (orchestrator, per user) →
+`scrape-user-jobs` (Apify, **waits** for the chain) → `filter-job` (Gemini 3-way classify,
+waits) → `classify-job` (Gemini resume score) → then the orchestrator calls `sendRecapForUser`
+(`recap.ts`, Resend email). Runs are triggered **on demand** ("Run now" in the web app) or by
+each user's **optional imperative schedule** (`scheduled-user-pipeline`, attached via
+`schedules.create` with `externalId = userId`). There is no global cron — recurring runs are
+opt-in per user. `jobs_raw` / `jobs_filtered` are keyed `(user_id, job_id)` — every job belongs
+to one user.
 
 Frontend (in `web/`): Next.js 15 App Router + `@supabase/ssr`. Sign up (gated by
 `signup_allowlist`), email confirmation, resume upload (parsed server-side), search-config
-CRUD, threshold/profile/password settings.
+CRUD, threshold/profile/password settings, and an Automation card (Run now + schedule) that
+triggers Trigger.dev via `@trigger.dev/sdk` (`TRIGGER_SECRET_KEY`).
 
 Shared logic (in `shared/`): `parseResumePdf` and `buildLinkedInUrl` are imported by both
 the Trigger.dev tasks (relative path) and the Next.js Server Actions (`@shared/*` alias).

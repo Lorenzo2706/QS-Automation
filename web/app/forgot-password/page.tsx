@@ -1,22 +1,16 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Logo } from "@/components/brand/Logo";
-import { LoginForm } from "@/components/forms/LoginForm";
+import { ForgotPasswordForm } from "@/components/forms/ForgotPasswordForm";
 import { Card, CardBody } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/server";
 
-export default async function LoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ reset?: string }>;
-}) {
+export default async function ForgotPasswordPage() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (user) redirect("/dashboard");
-
-  const { reset } = await searchParams;
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-brand-ink-50 px-4 py-12">
@@ -25,16 +19,11 @@ export default async function LoginPage({
       </Link>
       <Card className="w-full max-w-md">
         <CardBody className="p-8">
-          <h1 className="mb-1 text-2xl font-semibold text-brand-ink">Welcome back</h1>
+          <h1 className="mb-1 text-2xl font-semibold text-brand-ink">Reset your password</h1>
           <p className="mb-6 text-sm text-brand-ink-500">
-            Sign in to manage your job scout.
+            Enter your email and we&apos;ll send you a link to set a new password.
           </p>
-          {reset === "success" ? (
-            <div className="mb-4 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
-              Password updated. Sign in with your new password.
-            </div>
-          ) : null}
-          <LoginForm />
+          <ForgotPasswordForm />
         </CardBody>
       </Card>
     </div>

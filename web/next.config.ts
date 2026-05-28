@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   // Trigger.dev backend). outputFileTracingRoot makes Vercel's standalone
   // bundler include the shared/ folder in the deploy.
   outputFileTracingRoot: path.join(import.meta.dirname, ".."),
-  serverExternalPackages: ["pdf2json"],
+  serverExternalPackages: ["pdf2json", "@trigger.dev/sdk"],
 };
 
 export default nextConfig;

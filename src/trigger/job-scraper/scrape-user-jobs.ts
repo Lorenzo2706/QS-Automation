@@ -42,7 +42,9 @@ interface ApifyStatusResponse {
 
 export const scrapeUserJobsTask = task({
   id: "scrape-user-jobs",
-  maxDuration: 1800,
+  // Generous headroom: this run now waits for the full filter→classify chain.
+  // Checkpointed waits (>5s) don't count toward compute, but leave room anyway.
+  maxDuration: 3600,
   run: async (payload: { userId: string }) => {
     const { userId } = payload;
 
@@ -139,6 +141,7 @@ export const scrapeUserJobsTask = task({
       }
 
       rows.push({
+        user_id: userId,
         job_id: jobId,
         title: job.title ?? null,
         standardized_title: job.normalizedTitle ?? job.standardizedTitle ?? null,
@@ -168,11 +171,13 @@ export const scrapeUserJobsTask = task({
       `User ${userId}: scraped ${jobs.length}, new ${newJobIds.length}, triggering filter for ${allJobIds.length}`
     );
 
-    // Trigger filter for every scraped job (new and already-seen). The filter
-    // task short-circuits on needs_evaluation=false, so re-scraped jobs don't
-    // re-hit Gemini but still reach classify-job for this user.
+    // Filter every scraped job (new and already-seen) and WAIT for the whole
+    // downstream chain (filter → classify) to finish, so the orchestrator can
+    // send the recap only once scoring is complete. The filter task
+    // short-circuits on needs_evaluation=false, so re-scraped jobs don't re-hit
+    // Gemini but still reach classify-job for this user.
     if (allJobIds.length > 0) {
-      await filterJobTask.batchTrigger(
+      await filterJobTask.batchTriggerAndWait(
         allJobIds.map((jobId) => ({
           payload: { jobId, userId },
           options: { idempotencyKey: `filter-job-${jobId}-${userId}` },

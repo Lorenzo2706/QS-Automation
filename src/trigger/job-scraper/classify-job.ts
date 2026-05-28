@@ -41,7 +41,7 @@ export const classifyJobTask = task({
     }
 
     // 3. Load filtered job
-    const job = await getFilteredJob(jobId);
+    const job = await getFilteredJob(userId, jobId);
     if (!job) throw new Error(`Filtered job not found: ${jobId}`);
 
     // 4. Ask Gemini to score relevance
@@ -64,9 +64,9 @@ export const classifyJobTask = task({
       relevance_reason: reason,
     });
 
-    // Notification is handled separately by the send-recap scheduled task,
-    // which drains job_scores rows where notified = false and emails one
-    // recap per user per day.
+    // Notification is handled by the run-user-pipeline orchestrator, which calls
+    // sendRecapForUser once scoring completes — it drains job_scores rows where
+    // notified = false and emails one recap per run.
     return { score, reason, meetsThreshold: score >= user.notification_threshold };
   },
 });

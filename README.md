@@ -1,76 +1,77 @@
 # QS Automation — Job Scraper
 
-Daily LinkedIn job scraper that filters for freelance/temporary roles, scores them against each
-user's resume with Gemini, and emails each user a daily recap of their high-match jobs. Built on
-Trigger.dev v3.
+Per-user LinkedIn job scraper that filters for freelance/temporary roles, scores them against
+each user's resume with Gemini, and emails that user a recap of their high-match jobs. Built on
+Trigger.dev v3. Runs are triggered **on demand** from the web app or by each user's **optional
+recurring schedule** — there is no global cron.
 
 ## What it does (end-to-end)
 
-1. At **09:00 Europe/Amsterdam**, `scrape-jobs` fires.
-2. It loads all active users from Supabase and fans out one `scrape-user-jobs` run per user.
-3. Each user run calls the **Apify** LinkedIn actor using that user's saved search URLs, waits for
-   it to finish (polling every 30s, up to 20 min), and bulk-inserts the results into `jobs_raw`
-   with `ON CONFLICT (job_id) DO NOTHING`. Truly-new rows are written with
-   `needs_evaluation = true`; rows that already exist are left untouched.
-4. For each scraped job, `filter-job` runs:
+1. A run starts for one user — either from the **"Run now"** button in the web app, or from that
+   user's recurring schedule (`scheduled-user-pipeline`, fired by a Trigger.dev imperative
+   schedule carrying the user's id in `externalId`). Both route into the `run-user-pipeline`
+   orchestrator.
+2. `run-user-pipeline` triggers `scrape-user-jobs` for that user **and waits** for the whole
+   downstream chain to finish.
+3. `scrape-user-jobs` calls the **Apify** LinkedIn actor using the user's saved search URLs, waits
+   for it (polling every 30s, up to 20 min), and bulk-inserts results into `jobs_raw` keyed
+   `(user_id, job_id)` with insert-ignore-duplicates. Truly-new rows get `needs_evaluation = true`.
+   It then `batchTriggerAndWait`s `filter-job` for every scraped job.
+4. For each scraped job, `filter-job` runs (per user):
    - If `needs_evaluation` is `true`, it asks **Gemini** to classify the posting as
-     `freelance` / `temporary` / `permanent` (exactly one true). Freelance and Temporary are
-     copied to `jobs_filtered` with `job_type` set to the Gemini category; Permanent is dropped.
-     Either way, `needs_evaluation` flips to `false` so the same job is never classified twice.
+     `freelance` / `temporary` / `permanent`. Freelance and Temporary are copied to
+     `jobs_filtered` (keyed `(user_id, job_id)`) with `job_type` set to the Gemini category;
+     Permanent is dropped. Either way `needs_evaluation` flips to `false`.
    - If `needs_evaluation` is already `false`, it trusts the prior decision — no Gemini call.
-     If the job is in `jobs_filtered`, it proceeds to scoring for this user; otherwise it skips.
+   - It then `triggerAndWait`s `classify-job`.
 5. `classify-job` short-circuits when `(user_id, job_id)` is already in `job_scores`. Otherwise
    it loads the user, their active resume, and the filtered job, then asks **Gemini** to score
    the match 0–100. The score is written to `job_scores`.
-6. At **09:30 Europe/Amsterdam**, `send-recap` fires. For each active user it queries
+6. Once the chain completes, the orchestrator calls `sendRecapForUser` (`recap.ts`): it queries
    `job_scores` for unnotified rows where `relevance_score >= user.notification_threshold`,
-   builds an HTML recap email with all matching jobs (sorted by score), sends it via **Resend**,
-   and flips `notified = true` on the included rows.
+   builds an HTML recap email (sorted by score), sends it via **Resend**, flips `notified = true`,
+   and records the run status on `pipeline_schedules.last_run_*`.
 
 ## Pipeline
 
 ```
-[cron 09:00 AMS]
+[Run now]  or  [per-user imperative schedule → scheduled-user-pipeline]
       │
       ▼
-scrape-jobs              ── fans out per active user
+run-user-pipeline        ── orchestrator (one user); concurrencyKey = userId; waits for the chain
       │
       ▼
 scrape-user-jobs         ── Apify LinkedIn actor; insert-ignore-duplicates into jobs_raw
-      │                     (new rows get needs_evaluation = true)
-      ▼ (one per job)
+      │                     (per user, keyed (user_id, job_id); new rows needs_evaluation = true)
+      ▼ batchTriggerAndWait (one per job)
 filter-job               ── if needs_evaluation: Gemini classifies freelance/temporary/permanent,
       │                     writes jobs_filtered.job_type, then flips the flag to false.
-      │                     If flag is already false, skip Gemini and use the prior decision.
-      ▼
+      ▼ triggerAndWait
 classify-job             ── if (user, job) already in job_scores: skip.
       │                     Else Gemini scores this job against the user's resume → job_scores.
-
-[cron 09:30 AMS]
-      │
       ▼
-send-recap               ── one email per active user via Resend, listing all unnotified
-                            matches above their threshold; flips job_scores.notified = true
+sendRecapForUser         ── (called by the orchestrator) one Resend email of this user's unnotified
+(recap.ts)                  matches above threshold; flips job_scores.notified = true
 ```
 
 ## Code layout
 
 ```
 src/trigger/
-├── job-scraper/                 ← the runtime pipeline
-│   ├── scrape-jobs.ts           scheduled task (09:00 AMS); fans out per user
-│   ├── scrape-user-jobs.ts      one Apify run per user; bulk insertNewRawJobs into jobs_raw
-│   ├── filter-job.ts            flag-driven; Gemini 3-way classify; writes jobs_filtered
-│   ├── classify-job.ts          Gemini resume-vs-job score; writes job_scores (skips if scored)
-│   ├── send-recap.ts            scheduled task (09:30 AMS); sends one Resend email per user
-│   │                            with all unnotified matches above threshold
-│   ├── gemini.ts                filterJob (3-way) + scoreJob prompts (gemini-2.5-flash-lite)
-│   ├── supabase.ts              all DB reads/writes; typed row shapes
-│   └── url-builder.ts           builds LinkedIn search URL from a SearchConfig
-└── setup/                       ← one-time, manually triggered from dashboard
-    ├── register-user.ts         creates a row in users (name, telegram, threshold)
-    ├── upload-resume.ts         parses a local PDF, stores text in resumes
-    └── create-search-config.ts  adds a search_configs row + builds LinkedIn URL
+├── job-scraper/                    ← the runtime pipeline
+│   ├── run-user-pipeline.ts        orchestrator (per user): scrape → … → recap; on demand or scheduled
+│   ├── scheduled-user-pipeline.ts  schedules.task target for per-user imperative schedules (externalId = userId)
+│   ├── scrape-user-jobs.ts         one Apify run per user; insertNewRawJobs into jobs_raw; waits for filter chain
+│   ├── filter-job.ts               flag-driven; Gemini 3-way classify; writes jobs_filtered; waits for classify
+│   ├── classify-job.ts             Gemini resume-vs-job score; writes job_scores (skips if scored)
+│   ├── recap.ts                    sendRecapForUser: renders + sends the Resend recap for one user
+│   ├── gemini.ts                   filterJob (3-way) + scoreJob prompts (gemini-2.5-flash-lite)
+│   ├── supabase.ts                 all DB reads/writes; typed row shapes; recordRunStatus
+│   └── url-builder.ts              builds LinkedIn search URL from a SearchConfig
+└── setup/                          ← one-time, manually triggered from dashboard
+    ├── register-user.ts            creates a row in users (name, threshold)
+    ├── upload-resume.ts            parses a local PDF, stores text in resumes
+    └── create-search-config.ts     adds a search_configs row + builds LinkedIn URL
 ```
 
 ## Database (Supabase)
@@ -128,8 +129,9 @@ All required in both `.env` (local) **and** the Trigger.dev dashboard (staging +
 | `SUPABASE_ANON_KEY` | future frontend clients (subject to RLS); not used by Trigger.dev tasks |
 | `APIFY_API_TOKEN` | `scrape-user-jobs` |
 | `GEMINI_API_KEY` | `filter-job`, `classify-job` |
-| `RESEND_API_KEY` | `send-recap` |
-| `RESEND_FROM_EMAIL` | `send-recap` (verified sender, e.g. `onboarding@resend.dev` or `jobs@yourdomain.com`) |
+| `RESEND_API_KEY` | `recap.ts` (`sendRecapForUser`) |
+| `RESEND_FROM_EMAIL` | `recap.ts` (verified sender, e.g. `onboarding@resend.dev` or `jobs@yourdomain.com`) |
+| `TRIGGER_SECRET_KEY` | **web app only** — lets Server Actions trigger `run-user-pipeline` and manage per-user schedules (`web/.env.local` + Vercel) |
 
 ## Running it
 
@@ -142,8 +144,8 @@ npm run deploy
 ```
 
 Test triggers (via the Trigger.dev MCP):
-- Full daily run: trigger `scrape-jobs`
-- Single user: trigger `scrape-user-jobs` with `{ userId }`
+- Full E2E for one user (scrape → … → recap email): trigger `run-user-pipeline` with `{ userId }`
+- Scrape + filter + score only (no email): trigger `scrape-user-jobs` with `{ userId }`
 - Single job against one user: trigger `filter-job` with `{ jobId, userId }`
 
 ## Key design choices worth remembering

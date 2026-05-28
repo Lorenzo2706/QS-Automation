@@ -1,7 +1,5 @@
-import { schedules } from "@trigger.dev/sdk/v3";
 import { Resend } from "resend";
 import {
-  getActiveUsers,
   getUnnotifiedMatches,
   markScoresNotified,
   RecapMatch,
@@ -64,7 +62,7 @@ function renderRecapHtml(userName: string, matches: RecapMatch[]): string {
 </html>`;
 }
 
-interface RecapResult {
+export interface RecapResult {
   userId: string;
   email: string;
   matches: number;
@@ -72,66 +70,43 @@ interface RecapResult {
   skipReason?: string;
 }
 
-export const sendRecapTask = schedules.task({
-  id: "send-recap",
-  // 09:30 Amsterdam — 30 min after scrape-jobs at 09:00. Anything still in
-  // flight rolls into tomorrow's recap.
-  cron: { pattern: "30 9 * * *", timezone: "Europe/Amsterdam" },
-  maxDuration: 300,
-  retry: {
-    maxAttempts: 5,
-    minTimeoutInMs: 2_000,
-    maxTimeoutInMs: 60_000,
-    factor: 2,
-    randomize: true,
-  },
-  run: async () => {
-    const apiKey = process.env.RESEND_API_KEY;
-    const from = process.env.RESEND_FROM_EMAIL;
-    if (!apiKey) throw new Error("RESEND_API_KEY is not set");
-    if (!from) throw new Error("RESEND_FROM_EMAIL is not set");
+// Sends one recap email to a single user covering their un-notified matches
+// above threshold, then marks those scores notified. Shared by the on-demand
+// orchestrator (run-user-pipeline) — no global cron drives recaps anymore.
+// Throws on a Resend send error so the caller's retry policy can kick in.
+export async function sendRecapForUser(user: UserRow): Promise<RecapResult> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL;
+  if (!apiKey) throw new Error("RESEND_API_KEY is not set");
+  if (!from) throw new Error("RESEND_FROM_EMAIL is not set");
 
-    const resend = new Resend(apiKey);
-    const users: UserRow[] = await getActiveUsers();
-    const summary: RecapResult[] = [];
+  const matches = await getUnnotifiedMatches(user.user_id, user.notification_threshold);
 
-    for (const user of users) {
-      const matches = await getUnnotifiedMatches(user.user_id, user.notification_threshold);
+  if (matches.length === 0) {
+    console.log(`User ${user.name}: no new matches above threshold ${user.notification_threshold}`);
+    return { userId: user.user_id, email: user.email, matches: 0, sent: false, skipReason: "no_matches" };
+  }
 
-      if (matches.length === 0) {
-        console.log(`User ${user.name}: no new matches above threshold ${user.notification_threshold}`);
-        summary.push({ userId: user.user_id, email: user.email, matches: 0, sent: false, skipReason: "no_matches" });
-        continue;
-      }
+  const resend = new Resend(apiKey);
+  const html = renderRecapHtml(user.name, matches);
+  const subject = `🎯 ${matches.length} new job match${matches.length === 1 ? "" : "es"} for you`;
 
-      const html = renderRecapHtml(user.name, matches);
-      const subject = `🎯 ${matches.length} new job match${matches.length === 1 ? "" : "es"} for you`;
+  const { error: sendErr } = await resend.emails.send({
+    from,
+    to: user.email,
+    subject,
+    html,
+  });
 
-      const { error: sendErr } = await resend.emails.send({
-        from,
-        to: user.email,
-        subject,
-        html,
-      });
+  if (sendErr) {
+    throw new Error(`Resend send failed for ${user.email}: ${sendErr.message}`);
+  }
 
-      if (sendErr) {
-        // Throw to let Trigger.dev's retry kick in for transient Resend errors
-        throw new Error(`Resend send failed for ${user.email}: ${sendErr.message}`);
-      }
+  await markScoresNotified(
+    user.user_id,
+    matches.map((m) => m.job_id)
+  );
 
-      await markScoresNotified(
-        user.user_id,
-        matches.map((m) => m.job_id)
-      );
-
-      console.log(`Sent recap to ${user.email}: ${matches.length} match(es)`);
-      summary.push({ userId: user.user_id, email: user.email, matches: matches.length, sent: true });
-    }
-
-    return {
-      users: users.length,
-      sent: summary.filter((s) => s.sent).length,
-      summary,
-    };
-  },
-});
+  console.log(`Sent recap to ${user.email}: ${matches.length} match(es)`);
+  return { userId: user.user_id, email: user.email, matches: matches.length, sent: true };
+}

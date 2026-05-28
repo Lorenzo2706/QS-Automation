@@ -3,6 +3,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface JobRow {
+  user_id: string;
   job_id: string;
   title: string | null;
   standardized_title: string | null;
@@ -127,76 +128,82 @@ export async function insertSearchConfig(
 
 // ─── Raw jobs ─────────────────────────────────────────────────────────────────
 
-// Inserts a batch of scraped jobs, ignoring any whose job_id already exists
-// in jobs_raw. Returns the job_ids that were actually inserted — those are
-// the rows carrying needs_evaluation=true and eligible for a Gemini filter
-// call. Existing rows are left untouched (their needs_evaluation flag keeps
-// whatever value it had from the prior run).
+// Inserts a batch of scraped jobs (all carrying the same user_id), ignoring any
+// (user_id, job_id) pair that already exists in jobs_raw. Returns the job_ids
+// that were actually inserted — those are the rows carrying needs_evaluation=true
+// and eligible for a Gemini filter call. Existing rows are left untouched (their
+// needs_evaluation flag keeps whatever value it had from the prior run).
 export async function insertNewRawJobs(jobs: JobRow[]): Promise<string[]> {
   if (jobs.length === 0) return [];
   const db = getClient();
   const { data, error } = await db
     .from("jobs_raw")
-    .upsert(jobs, { onConflict: "job_id", ignoreDuplicates: true })
+    .upsert(jobs, { onConflict: "user_id,job_id", ignoreDuplicates: true })
     .select("job_id");
   if (error) throw new Error(`insertNewRawJobs: ${error.message}`);
   return (data ?? []).map((row: { job_id: string }) => row.job_id);
 }
 
-export async function getRawJob(jobId: string): Promise<JobRow | null> {
+export async function getRawJob(userId: string, jobId: string): Promise<JobRow | null> {
   const db = getClient();
   const { data, error } = await db
     .from("jobs_raw")
     .select("*")
+    .eq("user_id", userId)
     .eq("job_id", jobId)
     .single();
   if (error && error.code !== "PGRST116") throw new Error(`getRawJob: ${error.message}`);
   return (data ?? null) as JobRow | null;
 }
 
-export async function markJobEvaluated(jobId: string): Promise<void> {
+export async function markJobEvaluated(userId: string, jobId: string): Promise<void> {
   const db = getClient();
   const { error } = await db
     .from("jobs_raw")
     .update({ needs_evaluation: false })
+    .eq("user_id", userId)
     .eq("job_id", jobId);
   if (error) throw new Error(`markJobEvaluated ${jobId}: ${error.message}`);
 }
 
 // ─── Filtered jobs ────────────────────────────────────────────────────────────
 
-export async function jobFilteredExists(jobId: string): Promise<boolean> {
+export async function jobFilteredExists(userId: string, jobId: string): Promise<boolean> {
   const db = getClient();
   const { count, error } = await db
     .from("jobs_filtered")
     .select("job_id", { count: "exact", head: true })
+    .eq("user_id", userId)
     .eq("job_id", jobId);
   if (error) throw new Error(`jobFilteredExists: ${error.message}`);
   return (count ?? 0) > 0;
 }
 
 export async function insertFilteredJob(
+  userId: string,
   jobId: string,
   jobType: "freelance" | "temporary"
 ): Promise<void> {
   const db = getClient();
-  const raw = await getRawJob(jobId);
+  const raw = await getRawJob(userId, jobId);
   if (!raw) throw new Error(`insertFilteredJob: raw job not found: ${jobId}`);
   // Copy jobs_raw row into jobs_filtered, overwriting job_type with Gemini's
   // classification and dropping the needs_evaluation flag (only belongs on raw).
+  // user_id is preserved so the filtered row stays scoped to this user.
   const { scraped_at, needs_evaluation: _flag, ...rest } = raw;
   const row = { ...rest, job_type: jobType, scraped_at };
   const { error } = await db
     .from("jobs_filtered")
-    .upsert(row, { onConflict: "job_id" });
+    .upsert(row, { onConflict: "user_id,job_id" });
   if (error) throw new Error(`insertFilteredJob: ${error.message}`);
 }
 
-export async function getFilteredJob(jobId: string): Promise<JobRow | null> {
+export async function getFilteredJob(userId: string, jobId: string): Promise<JobRow | null> {
   const db = getClient();
   const { data, error } = await db
     .from("jobs_filtered")
     .select("*")
+    .eq("user_id", userId)
     .eq("job_id", jobId)
     .single();
   if (error && error.code !== "PGRST116") throw new Error(`getFilteredJob: ${error.message}`);
@@ -286,6 +293,7 @@ export async function getUnnotifiedMatches(
   const { data: jobs, error: jobsErr } = await db
     .from("jobs_filtered")
     .select("job_id, title, company_name, location, url, apply_url")
+    .eq("user_id", userId)
     .in(
       "job_id",
       scoreRows.map((s) => s.job_id)
@@ -326,4 +334,31 @@ export async function markScoresNotified(userId: string, jobIds: string[]): Prom
     .eq("user_id", userId)
     .in("job_id", jobIds);
   if (error) throw new Error(`markScoresNotified: ${error.message}`);
+}
+
+// ─── Pipeline run status ────────────────────────────────────────────────────
+
+export type RunStatus = "running" | "success" | "failed";
+
+// Records the latest pipeline-run marker on the user's pipeline_schedules row.
+// Upserts so it works whether or not the user has configured a schedule, and
+// only touches the last_run_* fields (never the user's schedule config).
+export async function recordRunStatus(
+  userId: string,
+  status: RunStatus,
+  at?: Date
+): Promise<void> {
+  const db = getClient();
+  const { error } = await db
+    .from("pipeline_schedules")
+    .upsert(
+      {
+        user_id: userId,
+        last_run_status: status,
+        last_run_at: (at ?? new Date()).toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" }
+    );
+  if (error) throw new Error(`recordRunStatus: ${error.message}`);
 }

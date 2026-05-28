@@ -13,6 +13,11 @@ export const LoginSchema = z.object({
 });
 export type LoginInput = z.infer<typeof LoginSchema>;
 
+export const ForgotPasswordSchema = z.object({
+  email: z.string().trim().toLowerCase().email("Enter a valid email"),
+});
+export type ForgotPasswordInput = z.infer<typeof ForgotPasswordSchema>;
+
 export const JOB_TYPE_OPTIONS = [
   "CONTRACT",
   "TEMPORARY",
@@ -53,6 +58,18 @@ export const ProfileSchema = z.object({
 export const PasswordChangeSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters").max(128),
 });
+
+export const RECURRENCE_OPTIONS = ["daily", "weekdays", "weekly"] as const;
+
+export const ScheduleSchema = z.object({
+  // datetime-local value: "YYYY-MM-DDTHH:mm" (seconds optional)
+  startDateTime: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, "Pick a valid start date and time"),
+  recurrence: z.enum(RECURRENCE_OPTIONS),
+});
+export type ScheduleInput = z.infer<typeof ScheduleSchema>;
 
 export const COUNTRY_PRESETS = [
   { label: "Netherlands", geoId: "102890719" },

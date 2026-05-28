@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
-import { loginAction, type ActionResult } from "@/lib/actions/auth";
+import { requestPasswordResetAction, type ActionResult } from "@/lib/actions/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -12,13 +12,16 @@ function SubmitButton() {
   const { pending } = useFormStatus();
   return (
     <Button type="submit" size="lg" className="w-full" disabled={pending}>
-      {pending ? "Signing in..." : "Sign in"}
+      {pending ? "Sending..." : "Send reset link"}
     </Button>
   );
 }
 
-export function LoginForm() {
-  const [state, formAction] = useActionState<ActionResult | null, FormData>(loginAction, null);
+export function ForgotPasswordForm() {
+  const [state, formAction] = useActionState<ActionResult | null, FormData>(
+    requestPasswordResetAction,
+    null
+  );
   const error = state && "error" in state ? state.error : null;
 
   return (
@@ -26,24 +29,6 @@ export function LoginForm() {
       <Field label="Email" htmlFor="email">
         <Input id="email" name="email" type="email" autoComplete="email" required />
       </Field>
-      <Field label="Password" htmlFor="password">
-        <Input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-        />
-      </Field>
-
-      <div className="-mt-1 text-right">
-        <Link
-          href="/forgot-password"
-          className="text-sm text-brand-orange hover:underline"
-        >
-          Forgot password?
-        </Link>
-      </div>
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -54,9 +39,9 @@ export function LoginForm() {
       <SubmitButton />
 
       <p className="text-center text-sm text-brand-ink-500">
-        New here?{" "}
-        <Link href="/signup" className="text-brand-orange hover:underline">
-          Create an account
+        Remembered it?{" "}
+        <Link href="/login" className="text-brand-orange hover:underline">
+          Back to sign in
         </Link>
       </p>
     </form>

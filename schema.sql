@@ -67,9 +67,10 @@ CREATE TABLE IF NOT EXISTS search_configs (
 CREATE INDEX IF NOT EXISTS search_configs_user_active_idx
   ON search_configs (user_id, active);
 
--- Raw jobs (everything Apify returns; insert-only with ON CONFLICT DO NOTHING)
+-- Raw jobs (everything Apify returns; per-user, insert-only with ON CONFLICT DO NOTHING)
 CREATE TABLE IF NOT EXISTS jobs_raw (
-  job_id             TEXT        PRIMARY KEY,
+  user_id            UUID        NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  job_id             TEXT        NOT NULL,
   title              TEXT,
   standardized_title TEXT,
   job_type           TEXT,
@@ -87,15 +88,17 @@ CREATE TABLE IF NOT EXISTS jobs_raw (
   apply_url          TEXT,
   language           TEXT,
   scraped_at         TIMESTAMPTZ NOT NULL,
-  needs_evaluation   BOOLEAN     NOT NULL DEFAULT FALSE
+  needs_evaluation   BOOLEAN     NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (user_id, job_id)
 );
 
 CREATE INDEX IF NOT EXISTS jobs_raw_needs_eval_idx
-  ON jobs_raw (needs_evaluation) WHERE needs_evaluation = TRUE;
+  ON jobs_raw (user_id, needs_evaluation) WHERE needs_evaluation = TRUE;
 
--- Filtered jobs (passed Gemini temp/freelance check)
+-- Filtered jobs (passed Gemini temp/freelance check; per-user)
 CREATE TABLE IF NOT EXISTS jobs_filtered (
-  job_id             TEXT        PRIMARY KEY,
+  user_id            UUID        NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  job_id             TEXT        NOT NULL,
   title              TEXT,
   standardized_title TEXT,
   job_type           TEXT,
@@ -113,7 +116,8 @@ CREATE TABLE IF NOT EXISTS jobs_filtered (
   apply_url          TEXT,
   language           TEXT,
   scraped_at         TIMESTAMPTZ NOT NULL,
-  filtered_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  filtered_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, job_id)
 );
 
 -- Job scores (user × job, with notification status)
@@ -125,6 +129,23 @@ CREATE TABLE IF NOT EXISTS job_scores (
   relevance_reason TEXT,
   notified         BOOLEAN NOT NULL DEFAULT FALSE,
   PRIMARY KEY (user_id, job_id)
+);
+
+-- Pipeline schedules (one row per user): optional per-user schedule + last-run marker.
+-- The web app writes the schedule fields (owner RLS); the backend orchestrator
+-- writes last_run_* via the service_role key.
+CREATE TABLE IF NOT EXISTS pipeline_schedules (
+  user_id             UUID        PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+  enabled             BOOLEAN     NOT NULL DEFAULT FALSE,
+  recurrence          TEXT,            -- 'daily' | 'weekdays' | 'weekly'
+  start_at            TIMESTAMPTZ,     -- user-chosen anchor (time-of-day + weekly day)
+  cron                TEXT,            -- generated cron pattern
+  timezone            TEXT        NOT NULL DEFAULT 'Europe/Amsterdam',
+  trigger_schedule_id TEXT,            -- Trigger.dev imperative schedule id
+  last_run_at         TIMESTAMPTZ,
+  last_run_status     TEXT,            -- 'running' | 'success' | 'failed'
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================
@@ -170,9 +191,10 @@ CREATE TRIGGER on_auth_user_created
 ALTER TABLE public.users          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.resumes        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.search_configs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.jobs_raw       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.jobs_filtered  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.job_scores     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.jobs_raw           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.jobs_filtered      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.job_scores         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.pipeline_schedules ENABLE ROW LEVEL SECURITY;
 
 -- users: owner-scoped CRUD
 DROP POLICY IF EXISTS "users_select_own" ON public.users;
@@ -220,6 +242,20 @@ CREATE POLICY "search_configs_delete_own" ON public.search_configs
 DROP POLICY IF EXISTS "job_scores_select_own" ON public.job_scores;
 CREATE POLICY "job_scores_select_own" ON public.job_scores
   FOR SELECT TO authenticated USING (user_id = auth.uid());
+
+-- pipeline_schedules: owner-scoped CRUD (last_run_* written by the backend service_role)
+DROP POLICY IF EXISTS "pipeline_schedules_select_own" ON public.pipeline_schedules;
+DROP POLICY IF EXISTS "pipeline_schedules_insert_own" ON public.pipeline_schedules;
+DROP POLICY IF EXISTS "pipeline_schedules_update_own" ON public.pipeline_schedules;
+DROP POLICY IF EXISTS "pipeline_schedules_delete_own" ON public.pipeline_schedules;
+CREATE POLICY "pipeline_schedules_select_own" ON public.pipeline_schedules
+  FOR SELECT TO authenticated USING (user_id = auth.uid());
+CREATE POLICY "pipeline_schedules_insert_own" ON public.pipeline_schedules
+  FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+CREATE POLICY "pipeline_schedules_update_own" ON public.pipeline_schedules
+  FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "pipeline_schedules_delete_own" ON public.pipeline_schedules
+  FOR DELETE TO authenticated USING (user_id = auth.uid());
 
 -- jobs_raw, jobs_filtered: no client-facing policies. RLS is on; only the
 -- service_role key (used by Trigger.dev tasks) can read or write them.
