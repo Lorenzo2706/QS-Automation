@@ -1,16 +1,31 @@
-# Claude Workflow Builder
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project at a glance
 
-This repo is **QS Automation** — a daily LinkedIn job-scraper pipeline on Trigger.dev v3.
-Pipeline: `scrape-jobs` (cron 09:00 AMS) → `scrape-user-jobs` (Apify) → `filter-job` (Gemini
-3-way classify) → `classify-job` (Gemini resume score) → `notify-job` (Telegram).
+This repo is **QS Automation** — a daily LinkedIn job-scraper pipeline on Trigger.dev v3, plus
+a Next.js frontend that lets invited users self-serve onboarding.
+
+Pipeline (in `src/trigger/`): `scrape-jobs` (cron 09:00 AMS) → `scrape-user-jobs` (Apify) →
+`filter-job` (Gemini 3-way classify) → `classify-job` (Gemini resume score) → `send-recap`
+(cron 09:30 AMS, daily Resend email per user).
+
+Frontend (in `web/`): Next.js 15 App Router + `@supabase/ssr`. Sign up (gated by
+`signup_allowlist`), email confirmation, resume upload (parsed server-side), search-config
+CRUD, threshold/profile/password settings.
+
+Shared logic (in `shared/`): `parseResumePdf` and `buildLinkedInUrl` are imported by both
+the Trigger.dev tasks (relative path) and the Next.js Server Actions (`@shared/*` alias).
+Single source of truth — never duplicate.
+
 Storage: Supabase (`users`, `resumes`, `search_configs`, `jobs_raw`, `jobs_filtered`,
-`job_scores`). See `README.md` for the full pipeline diagram, table purposes, and RLS model;
-see `schema.sql` + `migrations/` for the canonical schema.
+`job_scores`, `signup_allowlist`). See `README.md` for the full pipeline diagram, table
+purposes, and RLS model; see `schema.sql` + `migrations/` for the canonical schema.
 
 The "Role / Workflow" section below applies when the user asks for a **new** automation.
-For changes to the existing job-scraper pipeline, skip steps 1–4 and go straight to Build.
+For changes to the existing job-scraper pipeline OR the web frontend, skip steps 1–4 and
+go straight to Build.
 
 ## Role
 
@@ -47,15 +62,48 @@ Your job is to research, clarify, plan, build, and deploy working TypeScript aut
 ## Project Structure
 
 ```
-src/trigger/{automation-name}/
-  {task-name}.ts    ← simple automations can live in a single file
-  {check-task}.ts   ← or split when there is a detection phase...
-  {process-task}.ts ← ...and a separate heavy-processing phase
+src/trigger/{automation-name}/   ← Trigger.dev tasks (backend)
+shared/                          ← code shared by /src and /web; edit here, never duplicate
+  linkedin/buildUrl.ts           ← LinkedIn URL builder (used by web + scrape-user-jobs)
+  resume/parsePdf.ts             ← pdf2json resume parser (used by web + upload-resume)
+web/                             ← Next.js 15 frontend, own package.json (no workspaces)
+migrations/                      ← numbered SQL diffs; canonical schema in /schema.sql
 ```
 
 - Each automation gets its own folder under `src/trigger/`
 - A single task file is fine for simple automations
 - Split into multiple files when one task detects/polls for new items and another does the heavy work (API calls, LLM, posting output) — see `/trigger-ref` for the orchestrator+processor pattern
+
+## Web frontend (`/web`)
+
+- Stack: Next.js 15 App Router + React 19 + Tailwind + `@supabase/ssr`. Server Actions for
+  every write. `pdf2json` runs on the Node runtime via Server Action — never on the client.
+- Auth: Supabase Auth with email confirmation. Confirm/reset emails go through Resend SMTP
+  configured in the Supabase dashboard (one-time, not in code).
+- Access gate: `public.signup_allowlist` table; the signup Server Action looks up the email
+  via the service-role client before calling `supabase.auth.signUp`. Add invites with
+  `INSERT INTO public.signup_allowlist (email) VALUES ('...')` in the Supabase SQL editor.
+- Sharing with backend: `shared/resume/parsePdf.ts` and `shared/linkedin/buildUrl.ts` are
+  imported via `@shared/*` (web) and relative `../../../shared/*.js` (Trigger.dev). Vercel
+  picks up `/shared` because `next.config.ts` sets `outputFileTracingRoot` to the repo root.
+  `pdf2json` is in `serverExternalPackages` — keep it there.
+- Brand: Quicksilver SVGs live in `web/public/brand/` (copied from `.assets/`); palette is
+  `#f47822` orange / `#231f20` ink, exposed as `brand.orange` / `brand.ink` in Tailwind.
+- Local dev: `cd web && npm install && npm run dev`. Backend dev server (`npm run dev` at
+  repo root) is independent — both just hit the same Supabase project.
+- Deploy: Vercel, Root Directory `web`. Same env vars as `web/.env.local.example`.
+
+## Database changes that touch RLS or auth
+
+- `users`, `resumes`, `search_configs` are RLS-scoped to the authenticated user — the web app
+  uses the cookie-aware client and writes go through normal `update`/`insert`. Do not reach
+  for the service-role key from the web app for these tables.
+- `jobs_raw`, `jobs_filtered`, `signup_allowlist` have no client policies — service-role only.
+  The Trigger.dev pipeline uses service-role; the web app only touches `signup_allowlist`
+  via `lib/supabase/admin.ts` (server-only) for the signup gate.
+- The `private.handle_new_auth_user` trigger creates the matching `public.users` row on
+  signup using `user_metadata.name`, so the signup Server Action passes `data: { name }`
+  and never touches `users` directly.
 
 ## Environment Variables — Security Rules
 
@@ -115,10 +163,21 @@ You have live Trigger.dev MCP tools. Prefer them over running CLI commands in th
 
 ## Testing Locally
 
-1. Start the dev server: `npm run dev`
+Trigger.dev backend:
+1. Start the dev server: `npm run dev` (at repo root)
 2. Use `mcp__trigger__trigger_task` to fire a test run with a sample payload
 3. Watch logs in the terminal — errors appear here in real time
 4. Use `mcp__trigger__get_run_details` to inspect the full run trace if something fails
+
+Web frontend:
+1. `cd web && npm install` (first time only)
+2. `npm run dev` — boots Next.js on `localhost:3000`
+3. `npm run type-check` — strict TypeScript check (covers `/shared` too)
+4. `npm run build` — production build, catches App Router edge cases that dev hides
+
+After changes that touch `/shared`, run **both** `npm run type-check` in `/web` AND
+`npx tsc --noEmit` at the repo root — the two TypeScript projects pick up the shared
+module independently and either can break.
 
 ## Deploying to Production
 

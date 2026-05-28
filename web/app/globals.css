@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    @apply bg-brand-ink-50 text-brand-ink antialiased;
+  }
+  ::selection {
+    @apply bg-brand-orange-200 text-brand-ink-900;
+  }
+}

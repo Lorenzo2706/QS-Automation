@@ -223,3 +223,17 @@ CREATE POLICY "job_scores_select_own" ON public.job_scores
 
 -- jobs_raw, jobs_filtered: no client-facing policies. RLS is on; only the
 -- service_role key (used by Trigger.dev tasks) can read or write them.
+
+-- ============================================================
+-- Signup allowlist (used by the web frontend's signup server action)
+-- ============================================================
+-- The frontend looks up an incoming email here (via the service_role key)
+-- before calling supabase.auth.signUp. No client-facing policies.
+
+CREATE TABLE IF NOT EXISTS public.signup_allowlist (
+  email     TEXT        PRIMARY KEY,
+  added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  note      TEXT
+);
+
+ALTER TABLE public.signup_allowlist ENABLE ROW LEVEL SECURITY;
