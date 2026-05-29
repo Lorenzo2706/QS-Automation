@@ -257,8 +257,14 @@ CREATE POLICY "pipeline_schedules_update_own" ON public.pipeline_schedules
 CREATE POLICY "pipeline_schedules_delete_own" ON public.pipeline_schedules
   FOR DELETE TO authenticated USING (user_id = auth.uid());
 
--- jobs_raw, jobs_filtered: no client-facing policies. RLS is on; only the
--- service_role key (used by Trigger.dev tasks) can read or write them.
+-- jobs_filtered: read-only for the owner so the web app can show matched jobs.
+-- All writes still come from the backend service_role key.
+DROP POLICY IF EXISTS "jobs_filtered_select_own" ON public.jobs_filtered;
+CREATE POLICY "jobs_filtered_select_own" ON public.jobs_filtered
+  FOR SELECT TO authenticated USING (user_id = auth.uid());
+
+-- jobs_raw: no client-facing policies. RLS is on; only the service_role key
+-- (used by Trigger.dev tasks) can read or write it.
 
 -- ============================================================
 -- Signup allowlist (used by the web frontend's signup server action)

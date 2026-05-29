@@ -18,6 +18,7 @@ interface ApifyJob {
   company?: string;
   companyDetails?: Record<string, unknown>;
   location?: string;
+  link?: string;
   jobUrl?: string;
   url?: string;
   descriptionText?: string;
@@ -149,7 +150,7 @@ export const scrapeUserJobsTask = task({
         company_name: job.companyName ?? job.company ?? null,
         company_details: job.companyDetails ?? null,
         location: job.location ?? null,
-        url: job.jobUrl ?? job.url ?? null,
+        url: job.link ?? job.jobUrl ?? job.url ?? null,
         description_text: job.descriptionText ?? job.description ?? null,
         posted_at: job.postedAt ?? null,
         posting_date_adj: job.postingDateAdj ?? null,

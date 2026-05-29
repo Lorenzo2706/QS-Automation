@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   ForgotPasswordSchema,
   LoginSchema,
-  PasswordChangeSchema,
+  ResetPasswordSchema,
   SignupSchema,
 } from "@/lib/validation";
 
@@ -89,7 +89,7 @@ export async function requestPasswordResetAction(
   const supabase = await createClient();
   const origin = getOrigin();
   const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
-    redirectTo: `${origin}/auth/confirm?next=/reset-password`,
+    redirectTo: `${origin}/auth/reset`,
   });
   // Surface only hard errors (e.g. rate limiting). For unknown emails Supabase does not
   // error — we still redirect to check-inbox so we never reveal whether an account exists.
@@ -102,7 +102,10 @@ export async function resetPasswordAction(
   _prev: ActionResult | null,
   formData: FormData
 ): Promise<ActionResult> {
-  const parsed = PasswordChangeSchema.safeParse({ password: formData.get("password") });
+  const parsed = ResetPasswordSchema.safeParse({
+    password: formData.get("password"),
+    confirmPassword: formData.get("confirmPassword"),
+  });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }

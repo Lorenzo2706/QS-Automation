@@ -9,6 +9,7 @@ const NAV_ITEMS: { href: string; label: string }[] = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/resume", label: "Resume" },
   { href: "/searches", label: "Searches" },
+  { href: "/jobs", label: "Jobs" },
   { href: "/settings", label: "Settings" },
 ];
 

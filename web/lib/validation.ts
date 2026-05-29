@@ -59,6 +59,17 @@ export const PasswordChangeSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters").max(128),
 });
 
+export const ResetPasswordSchema = z
+  .object({
+    password: z.string().min(8, "Password must be at least 8 characters").max(128),
+    confirmPassword: z.string(),
+  })
+  .refine((d) => d.password === d.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+export type ResetPasswordInput = z.infer<typeof ResetPasswordSchema>;
+
 export const RECURRENCE_OPTIONS = ["daily", "weekdays", "weekly"] as const;
 
 export const ScheduleSchema = z.object({

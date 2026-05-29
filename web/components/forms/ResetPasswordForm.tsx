@@ -36,6 +36,17 @@ export function ResetPasswordForm() {
         />
       </Field>
 
+      <Field label="Confirm new password" htmlFor="confirm-password">
+        <Input
+          id="confirm-password"
+          name="confirmPassword"
+          type="password"
+          autoComplete="new-password"
+          minLength={8}
+          required
+        />
+      </Field>
+
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
