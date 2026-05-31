@@ -17,9 +17,14 @@ export type JobCategory = "freelance" | "temporary" | "permanent";
 /**
  * Classifies a Dutch job posting into freelance / temporary / permanent.
  * Exactly one of the three booleans in the Gemini response must be true.
- * On any malformed response (parse error, zero or multiple trues), we
- * return "permanent" so the caller skips the job — we never throw here,
- * because a throw would consume retries and burn more tokens on the same job.
+ *
+ * Returns a category ONLY for a well-formed response. On a malformed response
+ * (parse error, or zero/multiple trues) we **throw** so the `filter-job` task
+ * retries (it re-rolls Gemini, which usually resolves a transient ambiguity).
+ * We deliberately do NOT fall back to "permanent" here: that would let the
+ * caller mark the job evaluated and drop it forever on a transient failure.
+ * If retries are exhausted the run fails visibly and the job stays pending
+ * (needs_evaluation=true), to be reprocessed on the next scrape.
  */
 export async function filterJob(title: string, description: string): Promise<JobCategory> {
   const model = getModel();
@@ -70,8 +75,7 @@ Description: ${description}`;
   try {
     parsed = JSON.parse(text);
   } catch {
-    console.warn(`filterJob: Gemini returned non-JSON, treating as permanent. Raw: ${text}`);
-    return "permanent";
+    throw new Error(`filterJob: Gemini returned non-JSON (will retry). Raw: ${text}`);
   }
 
   const f = parsed.is_freelance === true;
@@ -80,10 +84,9 @@ Description: ${description}`;
   const trueCount = Number(f) + Number(t) + Number(p);
 
   if (trueCount !== 1) {
-    console.warn(
-      `filterJob: Gemini returned ${trueCount} true booleans (expected 1), treating as permanent. Raw: ${text}`
+    throw new Error(
+      `filterJob: Gemini returned ${trueCount} true booleans (expected 1, will retry). Raw: ${text}`
     );
-    return "permanent";
   }
 
   if (f) return "freelance";

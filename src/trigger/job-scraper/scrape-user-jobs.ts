@@ -177,13 +177,34 @@ export const scrapeUserJobsTask = task({
     // send the recap only once scoring is complete. The filter task
     // short-circuits on needs_evaluation=false, so re-scraped jobs don't re-hit
     // Gemini but still reach classify-job for this user.
+    // Count jobs that didn't make it to a score this run, so the orchestrator
+    // can mention them in the recap instead of silently undercounting. A
+    // filter-job that failed outright (!ok) never scored its job; a successful
+    // one still flags scoreFailed when classify-job exhausted its own retries.
+    // These are re-attempted on the next run (classify-job short-circuits on an
+    // existing score), provided the posting is still in the scrape window.
+    let scoringFailures = 0;
     if (allJobIds.length > 0) {
-      await filterJobTask.batchTriggerAndWait(
+      const batch = await filterJobTask.batchTriggerAndWait(
         allJobIds.map((jobId) => ({
           payload: { jobId, userId },
           options: { idempotencyKey: `filter-job-${jobId}-${userId}` },
         }))
       );
+
+      for (const run of batch.runs) {
+        if (!run.ok) {
+          scoringFailures++;
+          console.warn(`User ${userId}: filter-job run failed — ${run.error}`);
+        } else if ((run.output as { scoreFailed?: boolean }).scoreFailed) {
+          scoringFailures++;
+        }
+      }
+      if (scoringFailures > 0) {
+        console.warn(
+          `User ${userId}: ${scoringFailures} job(s) could not be scored this run`
+        );
+      }
     }
 
     return {
@@ -192,6 +213,7 @@ export const scrapeUserJobsTask = task({
       jobsScraped: jobs.length,
       jobsNew: newJobIds.length,
       jobsTriggered: allJobIds.length,
+      scoringFailures,
     };
   },
 });

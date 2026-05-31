@@ -6,6 +6,7 @@ import { RunNowButton } from "@/components/RunNowButton";
 import { ScheduleForm } from "@/components/forms/ScheduleForm";
 import { describeSchedule, type Recurrence } from "@/lib/cron";
 import { RECURRENCE_OPTIONS } from "@/lib/validation";
+import { getRunStatus } from "@/lib/trigger/runStatus";
 
 const RUN_STATUS_STYLES: Record<string, string> = {
   running: "bg-amber-50 text-amber-700 border-amber-200",
@@ -44,7 +45,7 @@ export default async function DashboardPage() {
         .eq("active", true),
       supabase
         .from("pipeline_schedules")
-        .select("enabled, recurrence, start_at, last_run_at, last_run_status")
+        .select("enabled, recurrence, start_at, last_run_id")
         .eq("user_id", user.id)
         .maybeSingle(),
     ]);
@@ -64,8 +65,12 @@ export default async function DashboardPage() {
       ? describeSchedule(startLocal, recurrence)
       : null;
 
-  const lastRunStatus = schedule?.last_run_status ?? null;
-  const lastRunAt = schedule?.last_run_at ? new Date(schedule.last_run_at) : null;
+  // Status is derived live from Trigger.dev (never cached) so it can't get stuck.
+  // No run id → "never"; run id we can't resolve → "unknown".
+  const lastRunId = schedule?.last_run_id ?? null;
+  const runInfo = lastRunId ? await getRunStatus(lastRunId) : null;
+  const lastRunStatus = lastRunId ? (runInfo?.status ?? "unknown") : null;
+  const lastRunAt = runInfo?.at ?? null;
 
   return (
     <div className="flex flex-col gap-8">

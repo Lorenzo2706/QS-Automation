@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
-import { Card, CardBody, CardHeader, CardSubtitle, CardTitle } from "@/components/ui/card";
-import { JobReasonToggle } from "@/components/jobs/JobReasonToggle";
+import { Card, CardBody } from "@/components/ui/card";
+import { JobsList } from "@/components/jobs/JobsList";
 
 interface ScoreRow {
   job_id: string;
@@ -15,6 +15,7 @@ interface FilteredRow {
   location: string | null;
   url: string | null;
   apply_url: string | null;
+  posted_at: string | null;
 }
 
 const DEFAULT_THRESHOLD = 85;
@@ -49,7 +50,7 @@ export default async function JobsPage() {
   if (scores.length > 0) {
     const { data: filteredData, error: filteredError } = await supabase
       .from("jobs_filtered")
-      .select("job_id, title, company_name, location, url, apply_url")
+      .select("job_id, title, company_name, location, url, apply_url, posted_at")
       .in(
         "job_id",
         scores.map((s) => s.job_id)
@@ -72,6 +73,7 @@ export default async function JobsPage() {
       location: d?.location ?? null,
       linkedinUrl: d?.url ?? `https://www.linkedin.com/jobs/view/${s.job_id}`,
       applyUrl: d?.apply_url ?? null,
+      postedAt: d?.posted_at ?? null,
     };
   });
 
@@ -80,7 +82,7 @@ export default async function JobsPage() {
       <div>
         <h1 className="text-2xl font-semibold text-brand-ink">Jobs</h1>
         <p className="text-sm text-brand-ink-500">
-          Matches scored at or above your threshold of {threshold}, highest first.
+          Matches scored at or above your threshold of {threshold}.
         </p>
       </div>
 
@@ -101,49 +103,7 @@ export default async function JobsPage() {
           </CardBody>
         </Card>
       ) : (
-        <div className="flex flex-col gap-4">
-          {jobs.map((job) => (
-            <Card key={job.job_id}>
-              <CardHeader className="flex flex-col gap-1">
-                <div className="flex items-start justify-between gap-3">
-                  <CardTitle>{job.title}</CardTitle>
-                  <span className="shrink-0 rounded-full bg-brand-orange-50 px-2 py-0.5 text-xs font-medium text-brand-orange-700">
-                    Score {job.score}
-                  </span>
-                </div>
-                <CardSubtitle>
-                  {job.company}
-                  {job.location ? ` · ${job.location}` : ""}
-                </CardSubtitle>
-              </CardHeader>
-              <CardBody className="flex flex-col gap-3">
-                <div className="flex flex-col gap-1.5 text-sm">
-                  <a
-                    href={job.linkedinUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-brand-orange hover:underline"
-                  >
-                    View on LinkedIn
-                  </a>
-                  {job.applyUrl ? (
-                    <a
-                      href={job.applyUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-brand-orange hover:underline"
-                    >
-                      Apply directly
-                    </a>
-                  ) : (
-                    <span className="text-brand-ink-400">No direct link available</span>
-                  )}
-                </div>
-                {job.reason ? <JobReasonToggle reason={job.reason} /> : null}
-              </CardBody>
-            </Card>
-          ))}
-        </div>
+        <JobsList jobs={jobs} />
       )}
     </div>
   );

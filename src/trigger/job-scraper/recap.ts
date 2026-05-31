@@ -1,8 +1,7 @@
 import { Resend } from "resend";
 import {
-  getUnnotifiedMatches,
+  getUnnotifiedMatchIds,
   markScoresNotified,
-  RecapMatch,
   UserRow,
 } from "./supabase.js";
 
@@ -15,47 +14,42 @@ function escHtml(text: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function renderJobCard(match: RecapMatch): string {
-  const title = escHtml(match.title ?? "Unknown Title");
-  const company = escHtml(match.company_name ?? "Unknown Company");
-  const location = escHtml(match.location ?? "N/A");
-  const reason = escHtml(match.relevance_reason ?? "");
-  const linkedinUrl = match.url ? escHtml(match.url) : "";
-  const applyUrl = match.apply_url ? escHtml(match.apply_url) : "";
+// One simple end-of-run notification: how many NEW shortlisted jobs this run
+// produced, plus a button to the shortlist. No per-job cards.
+function renderRecapHtml(
+  userName: string,
+  count: number,
+  threshold: number,
+  shortlistUrl: string,
+  scoringFailures: number
+): string {
+  const heading =
+    count > 0
+      ? `${count} new job match${count === 1 ? "" : "es"}`
+      : `No new matches this run`;
 
-  const links: string[] = [];
-  if (linkedinUrl) {
-    links.push(
-      `<a href="${linkedinUrl}" style="color:#0a66c2;text-decoration:none;">View on LinkedIn</a>`
-    );
-  }
-  if (applyUrl && applyUrl !== linkedinUrl) {
-    links.push(
-      `<a href="${applyUrl}" style="color:#0a66c2;text-decoration:none;">Apply Here</a>`
-    );
-  }
+  const message =
+    count > 0
+      ? `Your latest run finished and found <strong>${count}</strong> new shortlisted job${count === 1 ? "" : "s"} at or above your threshold of ${threshold}.`
+      : `Your latest run finished. No new jobs cleared your threshold of ${threshold} this time — your shortlist is unchanged.`;
 
-  return `
-    <div style="border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:0 0 16px 0;background:#ffffff;">
-      <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;">
-        <h3 style="margin:0;font-size:18px;color:#111827;">${title}</h3>
-        <span style="font-size:14px;color:#10b981;font-weight:600;white-space:nowrap;">${match.relevance_score}/100</span>
-      </div>
-      <p style="margin:6px 0 0 0;font-size:14px;color:#4b5563;">🏢 ${company} &nbsp;·&nbsp; 📍 ${location}</p>
-      ${reason ? `<p style="margin:12px 0 0 0;font-size:14px;color:#374151;line-height:1.5;"><strong>Why it matches:</strong> ${reason}</p>` : ""}
-      ${links.length > 0 ? `<p style="margin:12px 0 0 0;font-size:14px;">${links.join(" &nbsp;|&nbsp; ")}</p>` : ""}
-    </div>`;
-}
+  // Surface jobs that couldn't be scored this run so the count above isn't read
+  // as the complete picture. They're retried automatically on the next run.
+  const failureNote =
+    scoringFailures > 0
+      ? `<p style="margin:0 0 24px 0;color:#b45309;font-size:14px;line-height:1.5;">Note: ${scoringFailures} job${scoringFailures === 1 ? "" : "s"} couldn't be scored this run and ${scoringFailures === 1 ? "is" : "are"} not yet reflected in the count above — ${scoringFailures === 1 ? "it" : "they"} will be retried on your next run.</p>`
+      : "";
 
-function renderRecapHtml(userName: string, matches: RecapMatch[]): string {
-  const cards = matches.map(renderJobCard).join("\n");
   return `<!DOCTYPE html>
 <html>
   <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;margin:0;padding:24px;">
-    <div style="max-width:640px;margin:0 auto;">
-      <h1 style="font-size:22px;color:#111827;margin:0 0 8px 0;">🎯 ${matches.length} new job match${matches.length === 1 ? "" : "es"}</h1>
-      <p style="margin:0 0 24px 0;color:#4b5563;font-size:14px;">Hi ${escHtml(userName)}, here are today's matches sorted by relevance.</p>
-      ${cards}
+    <div style="max-width:560px;margin:0 auto;">
+      <h1 style="font-size:22px;color:#231f20;margin:0 0 8px 0;">${heading}</h1>
+      <p style="margin:0 0 24px 0;color:#4b5563;font-size:15px;line-height:1.5;">Hi ${escHtml(userName)}, ${message}</p>
+      ${failureNote}
+      <p style="margin:0 0 8px 0;">
+        <a href="${escHtml(shortlistUrl)}" style="display:inline-block;background:#f47822;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;padding:12px 24px;border-radius:8px;">View your shortlist</a>
+      </p>
       <p style="margin:24px 0 0 0;font-size:12px;color:#9ca3af;text-align:center;">Sent by QS Automation</p>
     </div>
   </body>
@@ -66,30 +60,48 @@ export interface RecapResult {
   userId: string;
   email: string;
   matches: number;
+  scoringFailures: number;
   sent: boolean;
   skipReason?: string;
 }
 
-// Sends one recap email to a single user covering their un-notified matches
-// above threshold, then marks those scores notified. Shared by the on-demand
-// orchestrator (run-user-pipeline) — no global cron drives recaps anymore.
-// Throws on a Resend send error so the caller's retry policy can kick in.
-export async function sendRecapForUser(user: UserRow): Promise<RecapResult> {
+// Sends one end-of-run email to a single user reporting how many NEW shortlisted
+// jobs this run produced (un-notified scores above threshold), with a link to the
+// shortlist. Always sends — even at zero — so it doubles as a "run finished"
+// notice. Marks those scores notified after a successful send. Shared by the
+// on-demand orchestrator (run-user-pipeline). Throws on a Resend send error so
+// the caller's retry policy can kick in.
+export async function sendRecapForUser(
+  user: UserRow,
+  scoringFailures = 0
+): Promise<RecapResult> {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM_EMAIL;
+  const webUrl = process.env.WEB_APP_URL;
   if (!apiKey) throw new Error("RESEND_API_KEY is not set");
   if (!from) throw new Error("RESEND_FROM_EMAIL is not set");
+  if (!webUrl) throw new Error("WEB_APP_URL is not set");
 
-  const matches = await getUnnotifiedMatches(user.user_id, user.notification_threshold);
+  const shortlistUrl = `${webUrl.replace(/\/$/, "")}/jobs`;
 
-  if (matches.length === 0) {
-    console.log(`User ${user.name}: no new matches above threshold ${user.notification_threshold}`);
-    return { userId: user.user_id, email: user.email, matches: 0, sent: false, skipReason: "no_matches" };
-  }
+  const jobIds = await getUnnotifiedMatchIds(
+    user.user_id,
+    user.notification_threshold
+  );
+  const count = jobIds.length;
 
   const resend = new Resend(apiKey);
-  const html = renderRecapHtml(user.name, matches);
-  const subject = `🎯 ${matches.length} new job match${matches.length === 1 ? "" : "es"} for you`;
+  const html = renderRecapHtml(
+    user.name,
+    count,
+    user.notification_threshold,
+    shortlistUrl,
+    scoringFailures
+  );
+  const subject =
+    count > 0
+      ? `Your job run finished — ${count} new match${count === 1 ? "" : "es"}`
+      : `Your job run finished — no new matches`;
 
   const { error: sendErr } = await resend.emails.send({
     from,
@@ -102,11 +114,16 @@ export async function sendRecapForUser(user: UserRow): Promise<RecapResult> {
     throw new Error(`Resend send failed for ${user.email}: ${sendErr.message}`);
   }
 
-  await markScoresNotified(
-    user.user_id,
-    matches.map((m) => m.job_id)
-  );
+  await markScoresNotified(user.user_id, jobIds);
 
-  console.log(`Sent recap to ${user.email}: ${matches.length} match(es)`);
-  return { userId: user.user_id, email: user.email, matches: matches.length, sent: true };
+  console.log(
+    `Sent recap to ${user.email}: ${count} new match(es), ${scoringFailures} unscored`
+  );
+  return {
+    userId: user.user_id,
+    email: user.email,
+    matches: count,
+    scoringFailures,
+    sent: true,
+  };
 }

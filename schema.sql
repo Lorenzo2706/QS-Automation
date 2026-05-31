@@ -131,9 +131,10 @@ CREATE TABLE IF NOT EXISTS job_scores (
   PRIMARY KEY (user_id, job_id)
 );
 
--- Pipeline schedules (one row per user): optional per-user schedule + last-run marker.
+-- Pipeline schedules (one row per user): optional per-user schedule + last-run id.
 -- The web app writes the schedule fields (owner RLS); the backend orchestrator
--- writes last_run_* via the service_role key.
+-- writes last_run_id via the service_role key. Run status is derived live from
+-- Trigger.dev (runs.retrieve) — never cached here, so it can't get stuck.
 CREATE TABLE IF NOT EXISTS pipeline_schedules (
   user_id             UUID        PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
   enabled             BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -142,8 +143,7 @@ CREATE TABLE IF NOT EXISTS pipeline_schedules (
   cron                TEXT,            -- generated cron pattern
   timezone            TEXT        NOT NULL DEFAULT 'Europe/Amsterdam',
   trigger_schedule_id TEXT,            -- Trigger.dev imperative schedule id
-  last_run_at         TIMESTAMPTZ,
-  last_run_status     TEXT,            -- 'running' | 'success' | 'failed'
+  last_run_id         TEXT,            -- latest Trigger.dev run id; status derived live via runs.retrieve()
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

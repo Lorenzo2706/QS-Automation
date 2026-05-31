@@ -66,7 +66,7 @@ src/trigger/
 │   ├── classify-job.ts             Gemini resume-vs-job score; writes job_scores (skips if scored)
 │   ├── recap.ts                    sendRecapForUser: renders + sends the Resend recap for one user
 │   ├── gemini.ts                   filterJob (3-way) + scoreJob prompts (gemini-2.5-flash-lite)
-│   ├── supabase.ts                 all DB reads/writes; typed row shapes; recordRunStatus
+│   ├── supabase.ts                 all DB reads/writes; typed row shapes; recordLastRunId
 │   └── url-builder.ts              builds LinkedIn search URL from a SearchConfig
 └── setup/                          ← one-time, manually triggered from dashboard
     ├── register-user.ts            creates a row in users (name, threshold)

@@ -31,18 +31,24 @@ export async function runPipelineNowAction(): Promise<PipelineResult> {
   if (!user) return { error: "Not signed in" };
   if (!configured()) return { error: "Trigger.dev is not configured (TRIGGER_SECRET_KEY missing)" };
 
+  let runId: string;
   try {
-    await tasks.trigger(PIPELINE_TASK, { userId: user.id }, { concurrencyKey: user.id });
+    const handle = await tasks.trigger(
+      PIPELINE_TASK,
+      { userId: user.id },
+      { concurrencyKey: user.id }
+    );
+    runId = handle.id;
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Failed to start the run" };
   }
 
-  // Reflect "running" immediately; the backend orchestrator overwrites it on completion.
+  // Persist the run id so the dashboard can show its live status (runs.retrieve)
+  // right away. The backend orchestrator writes the same id once it starts.
   await supabase.from("pipeline_schedules").upsert(
     {
       user_id: user.id,
-      last_run_status: "running",
-      last_run_at: new Date().toISOString(),
+      last_run_id: runId,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "user_id" }

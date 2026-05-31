@@ -51,17 +51,6 @@ export interface UserRow {
   active: boolean;
 }
 
-export interface RecapMatch {
-  job_id: string;
-  title: string | null;
-  company_name: string | null;
-  location: string | null;
-  url: string | null;
-  apply_url: string | null;
-  relevance_score: number;
-  relevance_reason: string | null;
-}
-
 export interface ResumeRow {
   resume_id: string;
   user_id: string;
@@ -268,61 +257,22 @@ export async function jobScoreExists(userId: string, jobId: string): Promise<boo
   return (count ?? 0) > 0;
 }
 
-// Returns matching jobs that haven't been emailed yet, sorted by score desc.
-// job_scores has no FK to jobs_filtered, so we fetch both and merge in code.
-export async function getUnnotifiedMatches(
+// Returns job_ids of new shortlisted matches not yet emailed (notified=false,
+// score>=threshold). The count of these IDs is "new shortlisted jobs from this
+// run", since classify-job only writes a score row for genuinely new jobs.
+export async function getUnnotifiedMatchIds(
   userId: string,
   threshold: number
-): Promise<RecapMatch[]> {
+): Promise<string[]> {
   const db = getClient();
-  const { data: scores, error: scoresErr } = await db
+  const { data, error } = await db
     .from("job_scores")
-    .select("job_id, relevance_score, relevance_reason")
+    .select("job_id")
     .eq("user_id", userId)
     .eq("notified", false)
-    .gte("relevance_score", threshold)
-    .order("relevance_score", { ascending: false });
-  if (scoresErr) throw new Error(`getUnnotifiedMatches scores: ${scoresErr.message}`);
-  const scoreRows = (scores ?? []) as Array<{
-    job_id: string;
-    relevance_score: number;
-    relevance_reason: string | null;
-  }>;
-  if (scoreRows.length === 0) return [];
-
-  const { data: jobs, error: jobsErr } = await db
-    .from("jobs_filtered")
-    .select("job_id, title, company_name, location, url, apply_url")
-    .eq("user_id", userId)
-    .in(
-      "job_id",
-      scoreRows.map((s) => s.job_id)
-    );
-  if (jobsErr) throw new Error(`getUnnotifiedMatches jobs: ${jobsErr.message}`);
-  const jobById = new Map(
-    ((jobs ?? []) as Array<{
-      job_id: string;
-      title: string | null;
-      company_name: string | null;
-      location: string | null;
-      url: string | null;
-      apply_url: string | null;
-    }>).map((j) => [j.job_id, j])
-  );
-
-  return scoreRows.map((s) => {
-    const job = jobById.get(s.job_id);
-    return {
-      job_id: s.job_id,
-      title: job?.title ?? null,
-      company_name: job?.company_name ?? null,
-      location: job?.location ?? null,
-      url: job?.url ?? null,
-      apply_url: job?.apply_url ?? null,
-      relevance_score: s.relevance_score,
-      relevance_reason: s.relevance_reason,
-    };
-  });
+    .gte("relevance_score", threshold);
+  if (error) throw new Error(`getUnnotifiedMatchIds: ${error.message}`);
+  return ((data ?? []) as Array<{ job_id: string }>).map((r) => r.job_id);
 }
 
 export async function markScoresNotified(userId: string, jobIds: string[]): Promise<void> {
@@ -336,29 +286,23 @@ export async function markScoresNotified(userId: string, jobIds: string[]): Prom
   if (error) throw new Error(`markScoresNotified: ${error.message}`);
 }
 
-// ─── Pipeline run status ────────────────────────────────────────────────────
+// ─── Pipeline run id ─────────────────────────────────────────────────────────
 
-export type RunStatus = "running" | "success" | "failed";
-
-// Records the latest pipeline-run marker on the user's pipeline_schedules row.
-// Upserts so it works whether or not the user has configured a schedule, and
-// only touches the last_run_* fields (never the user's schedule config).
-export async function recordRunStatus(
-  userId: string,
-  status: RunStatus,
-  at?: Date
-): Promise<void> {
+// Records the latest Trigger.dev run id on the user's pipeline_schedules row.
+// The dashboard derives the run status live from this id (runs.retrieve), so we
+// never cache a status that could get stuck. Upserts so it works whether or not
+// the user has configured a schedule, and only touches last_run_id.
+export async function recordLastRunId(userId: string, runId: string): Promise<void> {
   const db = getClient();
   const { error } = await db
     .from("pipeline_schedules")
     .upsert(
       {
         user_id: userId,
-        last_run_status: status,
-        last_run_at: (at ?? new Date()).toISOString(),
+        last_run_id: runId,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id" }
     );
-  if (error) throw new Error(`recordRunStatus: ${error.message}`);
+  if (error) throw new Error(`recordLastRunId: ${error.message}`);
 }
