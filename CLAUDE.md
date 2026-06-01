@@ -16,6 +16,14 @@ each user's **optional imperative schedule** (`scheduled-user-pipeline`, attache
 opt-in per user. `jobs_raw` / `jobs_filtered` are keyed `(user_id, job_id)` — every job belongs
 to one user.
 
+Run status is derived **live**, not stored: the orchestrator persists `ctx.run.id` via
+`recordLastRunId`, and the dashboard resolves status on read through Trigger.dev
+`runs.retrieve` (`web/lib/trigger/runStatus.ts` — `COMPLETED`→success, terminal failures→failed,
+everything else→running). Migration `007_pipeline_run_id.sql` added `users.pipeline_run_id` and
+**dropped** the old `last_run_status` / `last_run_at` columns — don't reintroduce them.
+Per-user cron strings are built in `web/lib/cron.ts` from the schedule UI as **Europe/Amsterdam
+wall-clock** (literal hour/minute, no timezone conversion).
+
 Frontend (in `web/`): Next.js 15 App Router + `@supabase/ssr`. Sign up (gated by
 `signup_allowlist`), email confirmation, resume upload (parsed server-side), search-config
 CRUD, threshold/profile/password settings, and an Automation card (Run now + schedule) that
@@ -32,6 +40,23 @@ purposes, and RLS model; see `schema.sql` + `migrations/` for the canonical sche
 The "Role / Workflow" section below applies when the user asks for a **new** automation.
 For changes to the existing job-scraper pipeline OR the web frontend, skip steps 1–4 and
 go straight to Build.
+
+## Commands
+
+| Task | Command | Where |
+|---|---|---|
+| Backend dev server | `npm run dev` (`trigger.dev dev`) | repo root |
+| Backend deploy | `npm run deploy` (`trigger.dev deploy`) | repo root |
+| Backend type-check | `npx tsc --noEmit` | repo root |
+| Web dev server | `npm run dev` (`next dev`, port 3000) | `web/` |
+| Web prod build | `npm run build` | `web/` |
+| Web lint | `npm run lint` | `web/` |
+| Web type-check | `npm run type-check` (`tsc --noEmit`, covers `/shared`) | `web/` |
+
+There is **no test suite** — neither `package.json` defines a test runner. "Verified working"
+means: type-check + build pass on **both** projects, and a real Trigger.dev run succeeds
+(confirm with `mcp__trigger__list_runs`). After touching `/shared`, run the web type-check AND
+the root `tsc --noEmit` — the two TS projects pick up the shared module independently.
 
 ## Role
 
@@ -128,10 +153,11 @@ migrations/                      ← numbered SQL diffs; canonical schema in /sc
 - **When adding a new env var**: add it to `.env` with a descriptive comment explaining where to
   get it, then remind the user to also add it to the Trigger.dev dashboard
 - `SUPABASE_SERVICE_ROLE_KEY` is what every Trigger.dev task uses (bypasses RLS by design — `jobs_raw` and `jobs_filtered` have no client policies). Never expose it to a browser/frontend client.
+- `WEB_APP_URL` is **required** in the Trigger.dev dashboard — `recap.ts` throws if it's unset and uses it to build the `/jobs` shortlist link in the recap email. Because recap runs *after* the full scrape→filter→score chain, a missing value fails the whole run at the very end. Keep it in the README env table alongside `RESEND_API_KEY` / `RESEND_FROM_EMAIL`.
 
 ## Trigger.dev Critical Rules
 
-- Use `@trigger.dev/sdk` — NEVER `client.defineJob` (v2 pattern, breaks everything)
+- Import from `@trigger.dev/sdk/v3` (the specifier every task in this repo uses, e.g. `import { task } from "@trigger.dev/sdk/v3"`) — NEVER `client.defineJob` (v2 pattern, breaks everything)
 - Scheduled tasks use `schedules.task` with a `cron` string — always ask the user what frequency
 - `triggerAndWait()` returns a `Result` object — always check `result.ok` before `result.output`
 - NEVER wrap `triggerAndWait`, `batchTriggerAndWait`, or `wait.*` calls in `Promise.all`
@@ -200,7 +226,9 @@ Wait for the user to say "push it", "deploy", "ship it", or similar before touch
 - [ ] **User has explicitly confirmed** the automation works and approved the deploy
 - [ ] `.env` is in `.gitignore`
 
-**Deploy**: `npm run deploy`, or push to `master` — GitHub Actions auto-deploys via `.github/workflows/deploy.yml`
+**Deploy**: `npm run deploy`, or push to the branch GitHub Actions watches — `.github/workflows/deploy.yml` auto-deploys on push to **`master`**.
+
+> ⚠️ **Branch mismatch:** the repo's active/default branch is **`main`**, but `deploy.yml` triggers only on `master`. As configured, pushing to `main` does **not** auto-deploy. Either run `npm run deploy` manually, change the workflow's `branches:` to `main`, or push to `master`. Reconcile this before relying on CI deploys.
 
 **After deploying:**
 - Use `mcp__trigger__list_runs` to confirm the first run succeeded
