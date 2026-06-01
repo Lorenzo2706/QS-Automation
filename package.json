@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "npx trigger.dev@latest dev",
-    "deploy": "npx trigger.dev@latest deploy"
+    "dev": "trigger.dev dev",
+    "deploy": "trigger.dev deploy"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
@@ -16,6 +16,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/pdf-parse": "^1.1.4",
+    "trigger.dev": "^4.4.6",
     "typescript": "^5.5.0"
   }
 }
