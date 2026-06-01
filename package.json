@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "trigger.dev dev",
-    "deploy": "trigger.dev deploy"
+    "dev": "npx trigger.dev dev",
+    "deploy": "npx trigger.dev deploy"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
