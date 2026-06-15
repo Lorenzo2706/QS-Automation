@@ -7,11 +7,14 @@ export function MobileTopBar() {
       <Link href="/dashboard">
         <Logo height={26} priority />
       </Link>
-      <nav className="flex items-center gap-3 text-sm font-medium text-brand-ink-600">
-        <Link href="/resume">Resume</Link>
-        <Link href="/searches">Searches</Link>
-        <Link href="/settings">Settings</Link>
-      </nav>
+      <form action="/auth/signout" method="post">
+        <button
+          type="submit"
+          className="rounded-lg px-2 py-1 text-sm font-medium text-brand-ink-600 transition-colors hover:bg-brand-ink-50 hover:text-brand-orange"
+        >
+          Sign out
+        </button>
+      </form>
     </header>
   );
 }

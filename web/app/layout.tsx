@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -8,6 +8,14 @@ export const metadata: Metadata = {
   icons: {
     icon: "/brand/icon.svg",
   },
+};
+
+// viewportFit: "cover" lets env(safe-area-inset-*) resolve on notched devices,
+// which the mobile BottomNav relies on for its bottom padding.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -4,14 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/brand/Logo";
 import { cn } from "@/lib/cn";
-
-const NAV_ITEMS: { href: string; label: string }[] = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/resume", label: "Resume" },
-  { href: "/searches", label: "Searches" },
-  { href: "/jobs", label: "Jobs" },
-  { href: "/settings", label: "Settings" },
-];
+import { NAV_ITEMS, isActive } from "@/components/nav/navItems";
 
 export function Sidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname();
@@ -24,7 +17,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
       <nav className="flex-1 px-3 py-4">
         <ul className="flex flex-col gap-1">
           {NAV_ITEMS.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const active = isActive(pathname, item.href);
             return (
               <li key={item.href}>
                 <Link
